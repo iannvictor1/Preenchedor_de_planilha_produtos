@@ -102,6 +102,7 @@ O script faz:
 - roda `npm install`
 - roda `npm run build`
 - reinicia servicos ou tarefas agendadas informadas
+- se nenhuma tarefa for informada, tenta detectar e reiniciar automaticamente tarefas agendadas que apontem para a pasta do projeto
 
 As pastas e arquivos de dados locais, como `Fotos Cod/`, `Fichas-*`, planilhas e CSVs, ficam fora do Git pelo `.gitignore`.
 

@@ -3,7 +3,8 @@ param(
     [string]$BackendService = "",
     [string]$FrontendService = "",
     [string]$BackendTask = "",
-    [string]$FrontendTask = ""
+    [string]$FrontendTask = "",
+    [switch]$NoAutoRestartTasks
 )
 
 $ErrorActionPreference = "Stop"
@@ -62,6 +63,76 @@ function Restart-OptionalScheduledTask($Name) {
         }
 
         throw "Nao foi possivel iniciar a tarefa agendada '$taskName'. Detalhe: $message"
+    }
+}
+
+function Get-NormalizedTaskName($Name) {
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        return ""
+    }
+
+    return $Name.Replace("/", "\").TrimStart("\").ToLowerInvariant()
+}
+
+function Get-TaskFullName($Task) {
+    if ($Task.TaskPath.EndsWith("\")) {
+        return "$($Task.TaskPath)$($Task.TaskName)"
+    }
+
+    return "$($Task.TaskPath)\$($Task.TaskName)"
+}
+
+function Restart-ProjectScheduledTasks($ProjectDir, $ExcludedNames) {
+    if ($NoAutoRestartTasks) {
+        return
+    }
+
+    $resolvedProjectDir = (Resolve-Path -LiteralPath $ProjectDir).Path
+    $projectLeaf = Split-Path -Leaf $resolvedProjectDir
+    $needles = @(
+        $resolvedProjectDir,
+        $resolvedProjectDir.Replace("\", "/"),
+        $projectLeaf
+    ) | Where-Object { ![string]::IsNullOrWhiteSpace($_) }
+
+    $excluded = @($ExcludedNames | ForEach-Object { Get-NormalizedTaskName $_ })
+    $matchingTasks = @()
+
+    try {
+        $matchingTasks = Get-ScheduledTask | Where-Object {
+            $fullName = Get-TaskFullName $_
+            if ($excluded -contains (Get-NormalizedTaskName $fullName) -or $excluded -contains (Get-NormalizedTaskName $_.TaskName)) {
+                return $false
+            }
+
+            $actionText = ($_.Actions | ForEach-Object {
+                "$($_.Execute) $($_.Arguments) $($_.WorkingDirectory)"
+            }) -join " "
+
+            $matched = $false
+            foreach ($needle in $needles) {
+                if ($actionText -like "*$needle*") {
+                    $matched = $true
+                    break
+                }
+            }
+
+            return $matched
+        }
+    }
+    catch {
+        Write-Host "Nao foi possivel detectar tarefas agendadas automaticamente: $($_.Exception.Message)" -ForegroundColor Yellow
+        return
+    }
+
+    if (!$matchingTasks -or $matchingTasks.Count -eq 0) {
+        Write-Host ""
+        Write-Host "Nenhuma tarefa agendada vinculada a '$resolvedProjectDir' foi encontrada para reinicio automatico." -ForegroundColor Yellow
+        return
+    }
+
+    foreach ($task in $matchingTasks) {
+        Restart-OptionalScheduledTask -Name (Get-TaskFullName $task)
     }
 }
 
@@ -170,6 +241,7 @@ Restart-OptionalService -Name $BackendService
 Restart-OptionalService -Name $FrontendService
 Restart-OptionalScheduledTask -Name $BackendTask
 Restart-OptionalScheduledTask -Name $FrontendTask
+Restart-ProjectScheduledTasks -ProjectDir $ProjectDir -ExcludedNames @($BackendTask, $FrontendTask)
 
 Write-Host ""
 Write-Host "Atualizacao concluida." -ForegroundColor Green
