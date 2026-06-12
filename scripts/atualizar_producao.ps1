@@ -4,6 +4,7 @@ param(
     [string]$FrontendService = "",
     [string]$BackendTask = "",
     [string]$FrontendTask = "",
+    [string]$ProjectTask = "Sistema Produtos",
     [switch]$NoAutoRestartTasks
 )
 
@@ -241,7 +242,11 @@ Restart-OptionalService -Name $BackendService
 Restart-OptionalService -Name $FrontendService
 Restart-OptionalScheduledTask -Name $BackendTask
 Restart-OptionalScheduledTask -Name $FrontendTask
-Restart-ProjectScheduledTasks -ProjectDir $ProjectDir -ExcludedNames @($BackendTask, $FrontendTask)
+Restart-OptionalScheduledTask -Name $ProjectTask
+
+if ([string]::IsNullOrWhiteSpace($ProjectTask)) {
+    Restart-ProjectScheduledTasks -ProjectDir $ProjectDir -ExcludedNames @($BackendTask, $FrontendTask)
+}
 
 Write-Host ""
 Write-Host "Atualizacao concluida." -ForegroundColor Green

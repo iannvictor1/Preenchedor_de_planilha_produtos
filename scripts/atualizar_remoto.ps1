@@ -7,6 +7,7 @@ param(
     [string]$FrontendService = "",
     [string]$BackendTask = "",
     [string]$FrontendTask = "",
+    [string]$ProjectTask = "Sistema Produtos",
     [string]$UserName = ""
 )
 
@@ -24,7 +25,7 @@ if (!$connection.TcpTestSucceeded) {
 }
 
 $script = {
-    param($RemoteProjectDir, $RemoteBackendService, $RemoteFrontendService, $RemoteBackendTask, $RemoteFrontendTask)
+    param($RemoteProjectDir, $RemoteBackendService, $RemoteFrontendService, $RemoteBackendTask, $RemoteFrontendTask, $RemoteProjectTask)
 
     function Invoke-RemoteGitPull() {
         $previousErrorActionPreference = $ErrorActionPreference
@@ -58,13 +59,14 @@ $script = {
         -BackendService $RemoteBackendService `
         -FrontendService $RemoteFrontendService `
         -BackendTask $RemoteBackendTask `
-        -FrontendTask $RemoteFrontendTask
+        -FrontendTask $RemoteFrontendTask `
+        -ProjectTask $RemoteProjectTask
 }
 
 $params = @{
     ComputerName = $ComputerName
     ScriptBlock = $script
-    ArgumentList = @($ProjectDir, $BackendService, $FrontendService, $BackendTask, $FrontendTask)
+    ArgumentList = @($ProjectDir, $BackendService, $FrontendService, $BackendTask, $FrontendTask, $ProjectTask)
 }
 
 if ($credential) {

@@ -82,6 +82,12 @@ Se o backend/frontend rodam por tarefa agendada, informe o nome da tarefa:
 .\scripts\atualizar_producao.ps1 -ProjectDir "C:\sistema_produtos" -BackendTask "SistemaProdutosBackend" -FrontendTask "SistemaProdutosFrontend"
 ```
 
+Por padrao, o script tenta reiniciar a tarefa principal chamada `Sistema Produtos`. Para usar outro nome:
+
+```powershell
+.\scripts\atualizar_producao.ps1 -ProjectDir "C:\sistema_produtos" -ProjectTask "Nome da tarefa"
+```
+
 Se rodam como servico do Windows:
 
 ```powershell
@@ -102,7 +108,8 @@ O script faz:
 - roda `npm install`
 - roda `npm run build`
 - reinicia servicos ou tarefas agendadas informadas
-- se nenhuma tarefa for informada, tenta detectar e reiniciar automaticamente tarefas agendadas que apontem para a pasta do projeto
+- reinicia a tarefa principal `Sistema Produtos` por padrao
+- se `-ProjectTask ""` for informado, tenta detectar e reiniciar automaticamente tarefas agendadas que apontem para a pasta do projeto
 
 As pastas e arquivos de dados locais, como `Fotos Cod/`, `Fichas-*`, planilhas e CSVs, ficam fora do Git pelo `.gitignore`.
 
