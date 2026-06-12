@@ -653,6 +653,7 @@ function App() {
         <div>
           <h1>Catalogo de produtos</h1>
           <p>Veja os produtos com fotos, selecione itens e gere a planilha Excel.</p>
+          <span className="update-marker">atualizado</span>
         </div>
         <div className="top-actions">
           <div className="segmented" aria-label="Modo de visualizacao">

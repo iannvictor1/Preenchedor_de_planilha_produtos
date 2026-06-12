@@ -84,6 +84,14 @@ label.file-control {
   font-size: 14px;
 }
 
+.update-marker {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 760;
+}
+
 .top-actions {
   display: inline-flex;
   align-items: center;
