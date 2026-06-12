@@ -1,0 +1,856 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  --bg: #0f1214;
+  --surface: #151a1d;
+  --surface-2: #1b2224;
+  --surface-3: #20282b;
+  --line: #303b3d;
+  --line-soft: #263033;
+  --text: #f3f6f4;
+  --muted: #a9b4b1;
+  --faint: #75827e;
+  --accent: #d8fb67;
+  --accent-ink: #16200d;
+  --blue: #3174e0;
+  --blue-2: #255bb1;
+  --danger: #ffb5aa;
+  --warn-bg: #332516;
+  --warn-line: #8d5a21;
+  --shadow: 0 16px 40px rgb(0 0 0 / 0.28);
+  background: var(--bg);
+  color: var(--text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background:
+    linear-gradient(180deg, #171d20 0, var(--bg) 320px),
+    var(--bg);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button,
+label,
+input,
+select {
+  border-radius: 6px;
+}
+
+button,
+label.file-control {
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.app-shell {
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 20px;
+  padding: 2px 2px 0;
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 25px;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
+.topbar p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.top-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.segmented {
+  display: inline-flex;
+  min-height: 40px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #101416;
+}
+
+.segmented button {
+  min-width: 42px;
+  min-height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  border-right: 1px solid var(--line);
+  color: #cbd5d1;
+  background: transparent;
+}
+
+.segmented button:last-child {
+  border-right: 0;
+}
+
+.segmented button.active {
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+
+.control-band,
+.filter-band,
+.pagination-band,
+.status-line,
+.ordered-pdf-tool {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
+  border: 1px solid var(--line-soft);
+  background: rgb(21 26 29 / 0.92);
+  padding: 14px;
+  margin-bottom: 14px;
+  box-shadow: 0 1px 0 rgb(255 255 255 / 0.03) inset;
+}
+
+.pagination-band {
+  justify-content: center;
+  color: #c7d0cc;
+  font-size: 14px;
+}
+
+.ordered-pdf-tool {
+  align-items: stretch;
+  flex-direction: column;
+  gap: 14px;
+  border-color: #354347;
+  background: #121719;
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+
+.ordered-pdf-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.ordered-preview {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pagination-band span {
+  min-width: 170px;
+  text-align: center;
+}
+
+.file-control,
+.folder-input,
+.search-input {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--line);
+  background: #0f1416;
+  color: #dce3e0;
+  padding: 0 12px;
+}
+
+.file-control:hover,
+.folder-input:focus-within,
+.search-input:focus-within {
+  border-color: #60706c;
+  background: #11181a;
+}
+
+.file-control {
+  max-width: 320px;
+  cursor: pointer;
+}
+
+.add-file-control {
+  max-width: 190px;
+}
+
+.pdf-folder-input {
+  flex: 1 1 320px;
+}
+
+.file-control span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-control input {
+  display: none;
+}
+
+.folder-input {
+  flex: 1 1 340px;
+}
+
+.ordered-pdf-controls .file-control,
+.ordered-pdf-controls .folder-input {
+  min-height: 46px;
+}
+
+.ordered-pdf-controls button {
+  min-height: 46px;
+}
+
+.search-input {
+  flex: 1 1 380px;
+}
+
+.folder-input input,
+.search-input input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  background: transparent;
+}
+
+.folder-input input::placeholder,
+.search-input input::placeholder {
+  color: #788581;
+}
+
+button {
+  min-height: 40px;
+  border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 14px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+.file-control:focus-within {
+  outline: 2px solid rgb(216 251 103 / 0.75);
+  outline-offset: 2px;
+}
+
+.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 730;
+  box-shadow: 0 8px 20px rgb(216 251 103 / 0.14);
+}
+
+.secondary {
+  background: var(--blue);
+  color: #ffffff;
+}
+
+.secondary:hover:not(:disabled) {
+  background: var(--blue-2);
+}
+
+.ghost {
+  background: #171f21;
+  border-color: var(--line);
+  color: #eef3f1;
+}
+
+.ghost:hover:not(:disabled) {
+  border-color: #60706c;
+  background: #20292c;
+}
+
+.danger {
+  color: var(--danger);
+}
+
+.check-control {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  color: #dce3e0;
+  border: 1px solid transparent;
+}
+
+.check-control input,
+td input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.alert {
+  border: 1px solid var(--warn-line);
+  background: var(--warn-bg);
+  color: #ffd6a6;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  border-radius: 6px;
+}
+
+.status-line {
+  color: #c7d0cc;
+  font-size: 14px;
+  background: #121719;
+}
+
+.status-line span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pdf-analysis-panel {
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+  padding: 12px;
+  margin-bottom: 12px;
+  border-radius: 6px;
+}
+
+.pdf-analysis-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #dce3e0;
+  font-size: 14px;
+}
+
+.pdf-analysis-summary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line-soft);
+  background: #101517;
+  border-radius: 999px;
+}
+
+.pdf-match-list {
+  display: grid;
+  gap: 8px;
+}
+
+.pdf-match-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) minmax(120px, 0.8fr) minmax(150px, 0.9fr) minmax(260px, 1.6fr);
+  gap: 12px;
+  align-items: center;
+  min-height: 50px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  color: #c7d0cc;
+  font-size: 13px;
+  background: #111719;
+  border-radius: 6px;
+}
+
+.pdf-match-row.ordered-row {
+  grid-template-columns: 132px minmax(240px, 1.1fr) minmax(360px, 1.7fr) minmax(110px, 0.55fr) minmax(128px, 0.75fr) minmax(170px, 0.9fr);
+}
+
+.pdf-match-header {
+  display: grid;
+  grid-template-columns: 132px minmax(240px, 1.1fr) minmax(360px, 1.7fr) minmax(110px, 0.55fr) minmax(128px, 0.75fr) minmax(170px, 0.9fr);
+  gap: 12px;
+  padding: 0 10px;
+  color: var(--faint);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pdf-match-header span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-match-row.matched {
+  border-color: #354b3b;
+  background: #121b18;
+}
+
+.pdf-match-row:hover {
+  border-color: #4a5b57;
+  background: #151e20;
+}
+
+.pdf-match-row[draggable="true"] {
+  cursor: grab;
+}
+
+.pdf-match-row.dragging {
+  opacity: 0.55;
+  cursor: grabbing;
+}
+
+.pdf-match-row.drag-over {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.pdf-match-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  overflow: visible;
+}
+
+.row-actions input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: #d8fb67;
+}
+
+.drag-handle {
+  width: 24px;
+  min-width: 24px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  color: #aeb7b4;
+  cursor: grab;
+  border: 1px solid transparent;
+}
+
+.drag-handle:hover {
+  border-color: var(--line);
+  background: #1a2224;
+}
+
+.icon-button {
+  min-width: 28px;
+  width: 28px;
+  min-height: 28px;
+  height: 28px;
+  padding: 0;
+  border-color: var(--line);
+  background: #171d1b;
+  color: #eef3f1;
+}
+
+.icon-button:hover:not(:disabled),
+.replace-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.pdf-file-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pdf-file-cell > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #edf4f1;
+}
+
+.replace-button {
+  min-height: 28px;
+  flex: 0 0 auto;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  background: #171d1b;
+  color: #eef3f1;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.replace-button input {
+  display: none;
+}
+
+.ok {
+  color: #b9f3a0;
+}
+
+.warn {
+  color: #ffd789;
+}
+
+.table-wrap {
+  width: 100%;
+  overflow: auto;
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+  border-radius: 6px;
+}
+
+.catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(205px, 1fr));
+  gap: 16px;
+}
+
+.product-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    transform 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.product-card:hover {
+  border-color: #4a5b57;
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgb(0 0 0 / 0.22);
+}
+
+.product-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset, 0 14px 30px rgb(216 251 103 / 0.08);
+}
+
+.product-card.disabled {
+  cursor: default;
+}
+
+.product-image {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1 / 1;
+  background: #20282b;
+  color: #65716c;
+}
+
+.product-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #ffffff;
+}
+
+.product-image input {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  margin: 0;
+  filter: drop-shadow(0 2px 5px rgb(0 0 0 / 0.45));
+}
+
+.product-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 13px;
+}
+
+.product-code {
+  color: #efffb0;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.product-info h2 {
+  display: -webkit-box;
+  min-height: 42px;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.35;
+  font-weight: 720;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.product-info p {
+  width: 100%;
+  min-height: 18px;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty-panel {
+  grid-column: 1 / -1;
+  min-height: 170px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 6px;
+}
+
+table {
+  width: 100%;
+  min-width: 920px;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  border-bottom: 1px solid var(--line-soft);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: middle;
+  font-size: 14px;
+}
+
+th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #20282b;
+  color: #cbd5d1;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+tbody tr:hover {
+  background: #1b2325;
+}
+
+.select-col {
+  width: 48px;
+}
+
+.code-cell {
+  width: 110px;
+  color: #efffb0;
+  font-weight: 700;
+}
+
+.photo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  height: 24px;
+  border: 1px solid;
+  font-size: 12px;
+  font-weight: 760;
+  border-radius: 999px;
+}
+
+.photo.yes {
+  color: #bdf6a8;
+  border-color: #4c7c41;
+  background: #1a2a18;
+}
+
+.photo.no {
+  color: #ffc5bc;
+  border-color: #7d4038;
+  background: #2d1d1b;
+}
+
+.empty-row {
+  height: 150px;
+  text-align: center;
+  color: #aeb7b4;
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    padding: 12px;
+  }
+
+  .topbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .top-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .segmented {
+    width: 100%;
+  }
+
+  .segmented button {
+    flex: 1;
+  }
+
+  .topbar .primary,
+  .control-band button,
+  .filter-band button,
+  .pagination-band button {
+    width: 100%;
+  }
+
+  .pagination-band span {
+    width: 100%;
+  }
+
+  .file-control,
+  .folder-input,
+  .search-input {
+    flex: 1 1 100%;
+    max-width: none;
+    width: 100%;
+  }
+}
+
+@media print {
+  :root {
+    color-scheme: light;
+    background: #ffffff;
+    color: #111315;
+  }
+
+  body {
+    background: #ffffff;
+  }
+
+  .app-shell {
+    min-height: auto;
+    padding: 0;
+  }
+
+  .topbar {
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #cfd6d2;
+  }
+
+  .topbar p,
+  .top-actions,
+  .control-band,
+  .filter-band,
+  .status-line,
+  .ordered-pdf-tool,
+  .pagination-band,
+  .alert,
+  .table-wrap,
+  .product-image input {
+    display: none !important;
+  }
+
+  .topbar h1 {
+    color: #111315;
+    font-size: 22px;
+  }
+
+  .catalog-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+
+  .product-card,
+  .product-card.selected {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    border: 1px solid #d6ddda;
+    background: #ffffff;
+    box-shadow: none;
+  }
+
+  .product-image {
+    background: #f4f6f5;
+  }
+
+  .product-info {
+    padding: 9px;
+  }
+
+  .product-code {
+    color: #26342f;
+  }
+
+  .product-info h2 {
+    min-height: auto;
+    color: #111315;
+    font-size: 12px;
+    line-height: 1.25;
+  }
+
+  .product-info p {
+    color: #53615c;
+    font-size: 11px;
+  }
+
+  .photo {
+    height: 20px;
+    min-width: 0;
+    padding: 0 6px;
+    color: #26342f !important;
+    border-color: #cfd6d2 !important;
+    background: #f4f6f5 !important;
+    font-size: 10px;
+  }
+}

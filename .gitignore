@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+
+frontend-react/node_modules/
+frontend-react/dist/
+frontend-react/.env.local
+
+.env
+.venv/
+venv/
+
+*.log
+
+# Dados locais grandes ou especificos da instalacao
+Fotos Cod/
+Fichas-*/
+Listagem dos produtos.xlsx.csv
+produtos_com_fotos*.xlsx
+*.zip
