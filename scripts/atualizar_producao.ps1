@@ -107,6 +107,43 @@ function Invoke-NpmCommand($Arguments, $FailureMessage) {
     }
 }
 
+function Get-SystemPython() {
+    $candidates = @(
+        @{ Command = "py"; Arguments = @("-3.12") },
+        @{ Command = "py"; Arguments = @("-3") },
+        @{ Command = "python"; Arguments = @() },
+        @{ Command = "python3"; Arguments = @() },
+        @{ Command = "$env:LocalAppData\Programs\Python\Python312\python.exe"; Arguments = @() },
+        @{ Command = "$env:ProgramFiles\Python312\python.exe"; Arguments = @() },
+        @{ Command = "${env:ProgramFiles(x86)}\Python312\python.exe"; Arguments = @() }
+    )
+
+    foreach ($candidate in $candidates) {
+        if ($candidate.Command -like "*.exe" -and !(Test-Path -LiteralPath $candidate.Command)) {
+            continue
+        }
+
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $output = & $candidate.Command @($candidate.Arguments) -c "import sys; print(sys.executable)" 2>$null
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        if ($exitCode -eq 0 -and ![string]::IsNullOrWhiteSpace($output)) {
+            return @{
+                Command = $candidate.Command
+                Arguments = $candidate.Arguments
+            }
+        }
+    }
+
+    throw "Python 3 nao foi encontrado na producao. Instale Python 3.12 em https://www.python.org/downloads/windows/ marcando 'Add python.exe to PATH', ou instale pelo winget: winget install -e --id Python.Python.3.12"
+}
+
 Write-Step "Entrando no projeto"
 Set-Location -LiteralPath $ProjectDir
 
@@ -115,7 +152,8 @@ Invoke-GitPull
 
 Write-Step "Atualizando dependencias Python"
 if (!(Test-Path -LiteralPath ".\.venv\Scripts\python.exe")) {
-    python -m venv .venv
+    $python = Get-SystemPython
+    & $python.Command @($python.Arguments) -m venv .venv
 }
 
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
