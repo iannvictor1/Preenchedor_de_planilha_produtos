@@ -187,6 +187,7 @@ function App() {
   const [generating, setGenerating] = useState(false);
   const [printingSelectedOnly, setPrintingSelectedOnly] = useState(false);
   const [error, setError] = useState("");
+  const [activeSection, setActiveSection] = useState("generator");
 
   const selectedCodes = useMemo(
     () => [...new Set(Object.values(selectedItems).filter(Boolean))],
@@ -648,14 +649,57 @@ function App() {
   }
 
   return (
-    <main className="app-shell">
+    <div className="app-layout">
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <FileSpreadsheet size={22} />
+          <div>
+            <strong>Sistema de produtos</strong>
+            <span>Planilhas e fichas</span>
+          </div>
+        </div>
+
+        <nav className="sidebar-nav" aria-label="Ferramentas">
+          <button
+            className={activeSection === "generator" ? "active" : ""}
+            onClick={() => {
+              setActiveSection("generator");
+              setError("");
+            }}
+          >
+            <Image size={19} />
+            <span>
+              <strong>Gerador com fotos</strong>
+              <small>Selecionar produtos e criar Excel</small>
+            </span>
+          </button>
+          <button
+            className={activeSection === "filler" ? "active" : ""}
+            onClick={() => {
+              setActiveSection("filler");
+              setError("");
+            }}
+          >
+            <FileText size={19} />
+            <span>
+              <strong>Preencher planilha</strong>
+              <small>Associar fichas PDF ao Excel</small>
+            </span>
+          </button>
+        </nav>
+      </aside>
+
+      <main className="app-shell">
       <header className="topbar">
         <div>
-          <h1>Catalogo de produtos</h1>
-          <p>Veja os produtos com fotos, selecione itens e gere a planilha Excel.</p>
-          <span className="update-marker">atualizado</span>
+          <h1>{activeSection === "generator" ? "Gerador de Excel com fotos" : "Preenchedor de planilha"}</h1>
+          <p>
+            {activeSection === "generator"
+              ? "Veja os produtos com fotos, selecione itens e gere a planilha Excel."
+              : "Envie o Excel gerado e associe as fichas PDF na ordem das abas."}
+          </p>
         </div>
-        <div className="top-actions">
+        {activeSection === "generator" && <div className="top-actions">
           <div className="segmented" aria-label="Modo de visualizacao">
             <button
               className={viewMode === "catalog" ? "active" : ""}
@@ -680,9 +724,10 @@ function App() {
             <Printer size={18} />
             {selectedCount ? "Exportar selecionados" : "Exportar PDF"}
           </button>
-        </div>
+        </div>}
       </header>
 
+      {activeSection === "generator" && <>
       <section className="control-band">
         <label className="file-control">
           <Upload size={17} />
@@ -755,7 +800,9 @@ function App() {
           Limpar selecao
         </button>
       </section>
+      </>}
 
+      {activeSection === "filler" && (
       <section className="ordered-pdf-tool">
         <div className="ordered-pdf-controls">
           <label className="file-control">
@@ -994,16 +1041,18 @@ function App() {
           </div>
         )}
       </section>
+      )}
 
       {error && <div className="alert">{error}</div>}
 
-      {isLargeSheetGeneration && (
+      {activeSection === "generator" && isLargeSheetGeneration && (
         <div className="alert">
           Muitos produtos selecionados para fichas individuais. Para gerar todos os produtos com velocidade,
           desmarque "Fichas individuais" e mantenha apenas a aba Produtos.
         </div>
       )}
 
+      {activeSection === "generator" && <>
       <section className="status-line">
         <span><FileSpreadsheet size={16} /> Produtos: {meta?.total ?? 0}</span>
         <span>Filtrados: {meta?.filteredTotal ?? 0}</span>
@@ -1134,7 +1183,9 @@ function App() {
           </table>
         </section>
       )}
-    </main>
+      </>}
+      </main>
+    </div>
   );
 }
 
