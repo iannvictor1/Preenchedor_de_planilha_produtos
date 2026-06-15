@@ -32,7 +32,19 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+function resolveApiUrl() {
+  const configuredUrl = String(import.meta.env.VITE_API_URL || "").trim();
+  const browserHost = window.location.hostname || "127.0.0.1";
+  if (configuredUrl) {
+    return configuredUrl.replace(
+      /^(https?:\/\/)(localhost|127\.0\.0\.1)(:\d+)?/i,
+      (_, protocol, _localHost, port = "") => `${protocol}${browserHost}${port}`,
+    );
+  }
+  return `${window.location.protocol}//${browserHost}:8000`;
+}
+
+const API_URL = resolveApiUrl();
 const MANY_SHEETS_LIMIT = 200;
 const PAGE_SIZE = 120;
 const DEFAULT_SUPPLIER_PDF_FOLDER = "Fichas-20260609T161612Z-3-001\\Fichas";
@@ -295,6 +307,10 @@ function App() {
   const [editedPrices, setEditedPrices] = useState({});
   const [users, setUsers] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [pdfAudit, setPdfAudit] = useState(null);
+  const [pdfAuditLoading, setPdfAuditLoading] = useState(false);
+  const [pdfAuditSearch, setPdfAuditSearch] = useState("");
+  const [pdfAuditMessage, setPdfAuditMessage] = useState("");
   const [editingUserId, setEditingUserId] = useState(null);
   const [userForm, setUserForm] = useState({
     username: "",
@@ -321,6 +337,17 @@ function App() {
     () => selectedCodes.map((code) => selectedProducts[code]).filter(Boolean),
     [selectedCodes, selectedProducts],
   );
+  const filteredPdfAuditItems = useMemo(() => {
+    const query = pdfAuditSearch.trim().toLowerCase();
+    return (pdfAudit?.items || [])
+      .map((item, auditIndex) => ({ ...item, auditIndex }))
+      .filter((item) =>
+        !query || [item.productCode, item.productDescription, item.supplier, item.suggestedFile]
+          .join(" ")
+          .toLowerCase()
+          .includes(query),
+      );
+  }, [pdfAudit, pdfAuditSearch]);
 
   function buildForm(extra = {}) {
     const form = new FormData();
@@ -435,6 +462,66 @@ function App() {
     } catch (err) {
       setError(err.message);
       setUsersLoading(false);
+    }
+  }
+
+  async function loadPdfAudit() {
+    setPdfAuditLoading(true);
+    setPdfAuditMessage("");
+    setError("");
+    try {
+      const form = new FormData();
+      form.append("supplier_pdf_folder_path", supplierPdfFolderPath);
+      form.append("folder_path", folderPath);
+      const response = await fetch(`${API_URL}/api/admin/pdf-audit/suggest`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: form,
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(apiErrorMessage(data, "Falha ao auditar as fichas."));
+      setPdfAudit(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPdfAuditLoading(false);
+    }
+  }
+
+  function updatePdfAuditItem(index, changes) {
+    setPdfAudit((current) => ({
+      ...current,
+      items: current.items.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, ...changes } : item,
+      ),
+    }));
+  }
+
+  async function renameAuditedPdfs() {
+    const items = (pdfAudit?.items || [])
+      .filter((item) => item.selected && item.suggestedFile)
+      .map((item) => ({ productCode: item.productCode, sourceFile: item.suggestedFile }));
+    if (!items.length) return;
+    if (!window.confirm(`Renomear ${items.length} ficha(s) adicionando o codigo interno?`)) return;
+
+    setPdfAuditLoading(true);
+    setPdfAuditMessage("");
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/api/admin/pdf-audit/rename`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ folderPath: pdfAudit.folderPath, items }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(apiErrorMessage(data, "Falha ao renomear as fichas."));
+      setPdfAuditMessage(`${data.renamedCount} ficha(s) renomeada(s) com sucesso.`);
+      await loadPdfAudit();
+      setPdfAuditMessage(`${data.renamedCount} ficha(s) renomeada(s) com sucesso.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPdfAuditLoading(false);
     }
   }
 
@@ -1035,6 +1122,21 @@ function App() {
           </button>
           {session.user.role === "administrador" && (
             <button
+              className={activeSection === "pdfAudit" ? "active" : ""}
+              onClick={() => {
+                setActiveSection("pdfAudit");
+                setError("");
+              }}
+            >
+              <Search size={19} />
+              <span>
+                <strong>Auditoria de fichas</strong>
+                <small>Conferir e renomear PDFs</small>
+              </span>
+            </button>
+          )}
+          {session.user.role === "administrador" && (
+            <button
               className={activeSection === "users" ? "active" : ""}
               onClick={() => {
                 setActiveSection("users");
@@ -1068,14 +1170,18 @@ function App() {
               ? "Gerador de Excel com fotos"
               : activeSection === "filler"
                 ? "Preenchedor de planilha"
-                : "Gerenciamento de usuários"}
+                : activeSection === "pdfAudit"
+                  ? "Auditoria de fichas PDF"
+                  : "Gerenciamento de usuários"}
           </h1>
           <p>
             {activeSection === "generator"
               ? "Veja os produtos com fotos, selecione itens e gere a planilha Excel."
               : activeSection === "filler"
                 ? "Envie o Excel gerado e associe as fichas PDF na ordem das abas."
-                : "Crie contas e controle senhas, status e níveis de permissão."}
+                : activeSection === "pdfAudit"
+                  ? "Revise as fichas sugeridas para os produtos com foto e inclua o código interno nos nomes."
+                  : "Crie contas e controle senhas, status e níveis de permissão."}
           </p>
         </div>
         {activeSection === "generator" && <div className="top-actions">
@@ -1657,6 +1763,117 @@ function App() {
           </div>
         )}
       </section>
+      )}
+
+      {activeSection === "pdfAudit" && session.user.role === "administrador" && (
+        <section className="pdf-audit-tool">
+          <div className="pdf-audit-controls">
+            <label className="folder-input">
+              <FolderOpen size={17} />
+              <input
+                value={supplierPdfFolderPath}
+                onChange={(event) => setSupplierPdfFolderPath(event.target.value)}
+                placeholder="Pasta das fichas PDF"
+              />
+            </label>
+            <label className="folder-input">
+              <Image size={17} />
+              <input
+                value={folderPath}
+                onChange={(event) => setFolderPath(event.target.value)}
+                placeholder="Pasta das fotos (vazio usa a padrão)"
+              />
+            </label>
+            <button className="secondary" onClick={loadPdfAudit} disabled={pdfAuditLoading}>
+              {pdfAuditLoading ? <Loader2 className="spin" size={17} /> : <Search size={17} />}
+              Auditar todos
+            </button>
+            <button
+              className="primary"
+              onClick={renameAuditedPdfs}
+              disabled={pdfAuditLoading || !pdfAudit?.items?.some((item) => item.selected && item.suggestedFile)}
+            >
+              <Pencil size={17} />
+              Renomear selecionadas
+            </button>
+          </div>
+
+          {pdfAuditMessage && <div className="pdf-audit-message">{pdfAuditMessage}</div>}
+
+          {pdfAudit && (
+            <>
+              <div className="pdf-audit-summary">
+                <span>Produtos com foto: {pdfAudit.productCount}</span>
+                <span>Fichas encontradas: {pdfAudit.pdfCount}</span>
+                <span className="ok">Sugestões aceitas: {pdfAudit.items.filter((item) => item.selected).length}</span>
+                <span className="warn">Revisar: {pdfAudit.items.filter((item) => !item.selected).length}</span>
+                <label className="search-input">
+                  <Search size={17} />
+                  <input
+                    value={pdfAuditSearch}
+                    onChange={(event) => setPdfAuditSearch(event.target.value)}
+                    placeholder="Buscar produto, código ou ficha"
+                  />
+                </label>
+              </div>
+
+              <datalist id="pdf-audit-options">
+                {pdfAudit.pdfOptions.map((file) => <option value={file} key={file} />)}
+              </datalist>
+
+              <div className="pdf-audit-list">
+                <div className="pdf-audit-row pdf-audit-header">
+                  <span>Usar</span>
+                  <span>Foto</span>
+                  <span>Produto</span>
+                  <span>Pontuação</span>
+                  <span>Ficha sugerida ou escolhida</span>
+                </div>
+                {filteredPdfAuditItems.map((item) => {
+                  const photoUrl = productPhotoUrl(item, folderPath);
+                  return (
+                    <div className={`pdf-audit-row ${item.selected ? "selected" : ""}`} key={item.productCode}>
+                      <span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(item.selected)}
+                          disabled={!item.suggestedFile}
+                          onChange={(event) => updatePdfAuditItem(item.auditIndex, { selected: event.target.checked })}
+                        />
+                      </span>
+                      <span className="pdf-audit-photo">
+                        {photoUrl ? <img src={photoUrl} alt="" /> : <Image size={22} />}
+                      </span>
+                      <span className="pdf-audit-product">
+                        <strong>{item.productCode} - {item.productDescription}</strong>
+                        <small>{[item.supplier, item.brand].filter(Boolean).join(" | ")}</small>
+                      </span>
+                      <span className={item.score >= 62 ? "ok" : "warn"}>{item.score || 0}%</span>
+                      <span>
+                        <input
+                          className="pdf-audit-file-input"
+                          list="pdf-audit-options"
+                          value={item.suggestedFile}
+                          onChange={(event) => updatePdfAuditItem(item.auditIndex, {
+                            suggestedFile: event.target.value,
+                            selected: Boolean(event.target.value),
+                          })}
+                          placeholder="Escolha uma ficha PDF"
+                        />
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {!pdfAudit && !pdfAuditLoading && (
+            <div className="pdf-audit-empty">
+              Informe a pasta das fichas e clique em “Auditar todos”. Nenhum arquivo será alterado nessa etapa.
+            </div>
+          )}
+        </section>
       )}
 
       {activeSection === "users" && session.user.role === "administrador" && (

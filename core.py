@@ -859,6 +859,132 @@ def ordered_pdf_folder_suggestions(workbook_bytes, pdf_folder_path, min_score=62
     }
 
 
+def audit_product_pdf_suggestions(pdf_folder_path, folder_path="", min_score=62):
+    folder = Path(pdf_folder_path).expanduser()
+    if not str(pdf_folder_path or "").strip():
+        raise ValueError("Informe a pasta das fichas.")
+    if not folder.exists():
+        raise ValueError(f"Pasta de fichas nao encontrada: {folder}")
+    if not folder.is_dir():
+        raise ValueError(f"O caminho das fichas nao e uma pasta: {folder}")
+
+    rows, zip_file, zip_mapping, folder_mapping = load_inputs(folder_path=folder_path)
+    try:
+        image_codes = set(zip_mapping) | set(folder_mapping)
+        products = [row_summary(row, image_codes) for row in rows if row_code(row) in image_codes]
+    finally:
+        if zip_file:
+            zip_file.close()
+
+    folder = folder.resolve()
+    pdfs = sorted(folder.rglob("*.pdf"))
+    pdf_labels = [
+        {
+            "file": str(pdf.relative_to(folder)),
+            "label": supplier_pdf_text_label(pdf),
+            "brand": detect_known_brand(pdf.name),
+        }
+        for pdf in pdfs
+    ]
+    used_files = set()
+    items = []
+
+    for product in products:
+        product_label = product_sheet_match_label(
+            product["description"],
+            product["supplier"],
+            product["brand"],
+            product["category"],
+        )
+        product_brand = detect_known_brand(
+            product["description"], product["supplier"], product["brand"]
+        )
+        best = None
+        best_score = 0
+        for pdf in pdf_labels:
+            if pdf["file"] in used_files:
+                continue
+            score = score_ordered_pdf_suggestion(
+                product_label,
+                pdf["label"],
+                product_brand,
+                pdf["brand"],
+            )
+            if score > best_score:
+                best = pdf
+                best_score = score
+
+        suggested_file = best["file"] if best and best_score > 0 else ""
+        selected = bool(suggested_file and best_score >= min_score)
+        if selected:
+            used_files.add(suggested_file)
+        items.append({
+            "productCode": product["code"],
+            "productDescription": product["description"],
+            "supplier": product["supplier"],
+            "brand": product["brand"],
+            "photoUrl": product["photoUrl"],
+            "photoDataUrl": product["photoDataUrl"],
+            "suggestedFile": suggested_file,
+            "score": best_score,
+            "selected": selected,
+        })
+
+    return {
+        "folderPath": str(folder),
+        "productCount": len(products),
+        "pdfCount": len(pdfs),
+        "matchedCount": sum(1 for item in items if item["selected"]),
+        "missingCount": sum(1 for item in items if not item["selected"]),
+        "pdfOptions": [pdf["file"] for pdf in pdf_labels],
+        "items": items,
+    }
+
+
+def rename_audited_product_pdfs(pdf_folder_path, renames):
+    folder = Path(pdf_folder_path).expanduser()
+    if not str(pdf_folder_path or "").strip() or not folder.is_dir():
+        raise ValueError("Pasta de fichas invalida.")
+    folder = folder.resolve()
+    prepared = []
+    seen_sources = set()
+    seen_targets = set()
+
+    for item in renames or []:
+        source_name = str(item.get("sourceFile", "")).strip()
+        code = normalize_code(item.get("productCode", ""))
+        if not source_name or not code:
+            continue
+        source = (folder / source_name).resolve()
+        if folder not in source.parents or not source.is_file() or source.suffix.lower() != ".pdf":
+            raise ValueError(f"Ficha invalida ou nao encontrada: {source_name}")
+        if source in seen_sources:
+            raise ValueError(f"A mesma ficha foi selecionada mais de uma vez: {source_name}")
+
+        clean_stem = re.sub(rf"^\s*{re.escape(code)}\s*[-_]\s*", "", source.stem).strip()
+        safe_code = re.sub(r"[^A-Za-z0-9_-]+", "_", code).strip("_")
+        if not safe_code:
+            raise ValueError(f"Codigo de produto invalido para a ficha: {source_name}")
+        target = source.with_name(f"{safe_code} - {clean_stem or 'Ficha'}.pdf")
+        if target in seen_targets:
+            raise ValueError(f"Duas fichas resultariam no mesmo nome: {target.name}")
+        if target != source and target.exists():
+            raise ValueError(f"Ja existe uma ficha chamada: {target.name}")
+        prepared.append((source, target, source_name))
+        seen_sources.add(source)
+        seen_targets.add(target)
+
+    renamed = []
+    for source, target, source_name in prepared:
+        if source != target:
+            source.rename(target)
+        renamed.append({
+            "sourceFile": source_name,
+            "targetFile": str(target.relative_to(folder)),
+        })
+    return {"renamedCount": len(renamed), "items": renamed}
+
+
 def fill_workbook_with_ordered_pdfs(workbook_bytes, pdf_files):
     if not workbook_bytes:
         raise ValueError("Envie o Excel gerado para preencher.")

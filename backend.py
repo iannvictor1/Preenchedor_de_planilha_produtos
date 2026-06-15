@@ -20,6 +20,7 @@ from auth import (
 )
 from core import (
     analyze_supplier_pdf_folder,
+    audit_product_pdf_suggestions,
     extract_supplier_pdf_data,
     fill_workbook_with_ordered_pdfs,
     fill_workbook_with_nfe_cest,
@@ -33,6 +34,7 @@ from core import (
     ordered_pdf_preview,
     read_product_prices,
     read_pdf_files_from_folder_selection,
+    rename_audited_product_pdfs,
 )
 
 
@@ -50,6 +52,16 @@ class UserUpdateRequest(BaseModel):
     password: str | None = None
     role: str | None = None
     active: bool | None = None
+
+
+class PdfAuditRenameItem(BaseModel):
+    productCode: str
+    sourceFile: str
+
+
+class PdfAuditRenameRequest(BaseModel):
+    folderPath: str
+    items: list[PdfAuditRenameItem]
 
 app.add_middleware(
     CORSMiddleware,
@@ -209,6 +221,32 @@ async def supplier_pdfs_analyze_folder(
             folder_path=folder_path,
         )
         return analyze_supplier_pdf_folder(supplier_pdf_folder_path, rows)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/admin/pdf-audit/suggest")
+async def admin_pdf_audit_suggest(
+    supplier_pdf_folder_path: Annotated[str, Form()] = "",
+    folder_path: Annotated[str, Form()] = "",
+    current_user: dict = Depends(require_admin),
+):
+    try:
+        return audit_product_pdf_suggestions(supplier_pdf_folder_path, folder_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/admin/pdf-audit/rename")
+def admin_pdf_audit_rename(
+    request: PdfAuditRenameRequest,
+    current_user: dict = Depends(require_admin),
+):
+    try:
+        return rename_audited_product_pdfs(
+            request.folderPath,
+            [item.dict() for item in request.items],
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
