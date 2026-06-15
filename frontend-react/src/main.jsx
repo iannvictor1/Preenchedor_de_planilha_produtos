@@ -13,14 +13,20 @@ import {
   Image,
   List,
   Loader2,
+  LogOut,
+  Pencil,
   Plus,
   RefreshCcw,
   Search,
   Shuffle,
   Trash2,
   Upload,
+  UserPlus,
+  Users,
   X,
   Printer,
+  DollarSign,
+  User,
 } from "lucide-react";
 import "./styles.css";
 
@@ -39,6 +45,91 @@ const KNOWN_BRANDS = [
   "SADIA",
   "PERDIGAO",
 ];
+
+function storedSession() {
+  try {
+    const session = JSON.parse(localStorage.getItem("productSystemSession") || "null");
+    return session?.token && session?.user?.username && session?.user?.role ? session : null;
+  } catch {
+    localStorage.removeItem("productSystemSession");
+    return null;
+  }
+}
+
+function formatPrice(value) {
+  const number = Number(value);
+  return Number.isFinite(number)
+    ? number.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })
+    : "Sem preço";
+}
+
+function LoginScreen({ onLogin }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submitLogin(event) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      const form = new FormData();
+      form.append("username", username);
+      form.append("password", password);
+      const response = await fetch(`${API_URL}/api/login`, { method: "POST", body: form });
+      const data = await response.json();
+      if (!response.ok) throw new Error(apiErrorMessage(data, "Falha ao entrar."));
+      onLogin(data);
+    } catch (err) {
+      setError(
+        err.message === "Failed to fetch"
+          ? `Nao consegui conectar na API em ${API_URL}.`
+          : err.message,
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main className="login-page">
+      <form className="login-card" onSubmit={submitLogin}>
+        <div className="login-brand">
+          <FileSpreadsheet size={28} />
+          <div>
+            <h1>Sistema de produtos</h1>
+            <p>Entre com seu usuário e senha</p>
+          </div>
+        </div>
+        {error && <div className="alert">{error}</div>}
+        <label>
+          Usuário
+          <input
+            autoComplete="username"
+            autoFocus
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            placeholder="seu usuário"
+          />
+        </label>
+        <label>
+          Senha
+          <input
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </label>
+        <button className="primary" type="submit" disabled={loading || !username || !password}>
+          {loading ? <Loader2 className="spin" size={18} /> : <User size={18} />}
+          Entrar
+        </button>
+      </form>
+    </main>
+  );
+}
 
 function detectBrand(...values) {
   const text = normalizeMatchText(values.filter(Boolean).join(" "));
@@ -178,16 +269,30 @@ function App() {
   const [search, setSearch] = useState("");
   const [showWithoutPhoto, setShowWithoutPhoto] = useState(false);
   const [includeSheets, setIncludeSheets] = useState(false);
+  const [includePrices, setIncludePrices] = useState(false);
+  const [pricePanelOpen, setPricePanelOpen] = useState(false);
   const [viewMode, setViewMode] = useState("catalog");
   const [products, setProducts] = useState([]);
   const [meta, setMeta] = useState(null);
   const [selectedItems, setSelectedItems] = useState({});
+  const [selectedProducts, setSelectedProducts] = useState({});
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [printingSelectedOnly, setPrintingSelectedOnly] = useState(false);
   const [error, setError] = useState("");
   const [activeSection, setActiveSection] = useState("generator");
+  const [session, setSession] = useState(storedSession);
+  const [editedPrices, setEditedPrices] = useState({});
+  const [users, setUsers] = useState([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [editingUserId, setEditingUserId] = useState(null);
+  const [userForm, setUserForm] = useState({
+    username: "",
+    password: "",
+    role: "vendedor",
+    active: true,
+  });
 
   const selectedCodes = useMemo(
     () => [...new Set(Object.values(selectedItems).filter(Boolean))],
@@ -203,6 +308,10 @@ function App() {
     () => (printingSelectedOnly ? products.filter((item) => selectedItems[productKey(item)]) : products),
     [printingSelectedOnly, products, selectedItems],
   );
+  const selectedPriceProducts = useMemo(
+    () => selectedCodes.map((code) => selectedProducts[code]).filter(Boolean),
+    [selectedCodes, selectedProducts],
+  );
 
   function buildForm(extra = {}) {
     const form = new FormData();
@@ -211,6 +320,112 @@ function App() {
     form.append("folder_path", folderPath);
     Object.entries(extra).forEach(([key, value]) => form.append(key, value));
     return form;
+  }
+
+  function authHeaders(token = session?.token) {
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+
+  function saveSession(nextSession) {
+    localStorage.setItem("productSystemSession", JSON.stringify(nextSession));
+    setSession(nextSession);
+  }
+
+  function logout() {
+    localStorage.removeItem("productSystemSession");
+    setSession(null);
+    setProducts([]);
+    setSelectedItems({});
+    setSelectedProducts({});
+    setEditedPrices({});
+    setError("");
+  }
+
+  function resetUserForm() {
+    setEditingUserId(null);
+    setUserForm({ username: "", password: "", role: "vendedor", active: true });
+  }
+
+  async function loadUsers(token) {
+    setUsersLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/api/users`, { headers: authHeaders(token) });
+      const data = await response.json();
+      if (response.status === 401) logout();
+      if (!response.ok) throw new Error(apiErrorMessage(data, "Falha ao carregar usuários."));
+      setUsers(data.users || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUsersLoading(false);
+    }
+  }
+
+  async function saveUser(event) {
+    event.preventDefault();
+    setUsersLoading(true);
+    setError("");
+    try {
+      const payload = {
+        username: userForm.username,
+        role: userForm.role,
+      };
+      if (editingUserId) payload.active = userForm.active;
+      if (userForm.password) payload.password = userForm.password;
+      const response = await fetch(
+        editingUserId ? `${API_URL}/api/users/${editingUserId}` : `${API_URL}/api/users`,
+        {
+          method: editingUserId ? "PUT" : "POST",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(apiErrorMessage(data, "Falha ao salvar usuário."));
+      if (data.token) {
+        saveSession({
+          token: data.token,
+          user: { id: data.id, username: data.username, role: data.role },
+        });
+      }
+      resetUserForm();
+      await loadUsers(data.token);
+    } catch (err) {
+      setError(err.message);
+      setUsersLoading(false);
+    }
+  }
+
+  function editUser(user) {
+    setEditingUserId(user.id);
+    setUserForm({
+      username: user.username,
+      password: "",
+      role: user.role,
+      active: user.active,
+    });
+  }
+
+  async function removeUser(user) {
+    if (!window.confirm(`Excluir o usuário ${user.username}?`)) return;
+    setUsersLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/api/users/${user.id}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(apiErrorMessage(data, "Falha ao excluir usuário."));
+      }
+      if (editingUserId === user.id) resetUserForm();
+      await loadUsers();
+    } catch (err) {
+      setError(err.message);
+      setUsersLoading(false);
+    }
   }
 
   function buildOrderedPdfForm() {
@@ -404,6 +619,7 @@ function App() {
       const effectivePage = next.page ?? page;
       const response = await fetch(`${API_URL}/api/products`, {
         method: "POST",
+        headers: authHeaders(),
         body: buildForm({
           search: effectiveSearch,
           only_with_photo: String(!effectiveShowWithoutPhoto),
@@ -412,6 +628,7 @@ function App() {
         }),
       });
       const data = await response.json();
+      if (response.status === 401) logout();
       if (!response.ok) throw new Error(apiErrorMessage(data, "Falha ao carregar produtos."));
       setProducts(data.products);
       setMeta(data);
@@ -577,16 +794,23 @@ function App() {
   }
 
   useEffect(() => {
-    loadProducts();
-  }, []);
+    if (session?.token) loadProducts();
+  }, [session?.token]);
 
   function toggleProduct(item) {
     if (!item.code) return;
     const key = productKey(item);
+    const wasSelected = Boolean(selectedItems[key]);
     setSelectedItems((current) => {
       const next = { ...current };
       if (next[key]) delete next[key];
       else next[key] = item.code;
+      return next;
+    });
+    setSelectedProducts((current) => {
+      const next = { ...current };
+      if (wasSelected) delete next[item.code];
+      else next[item.code] = item;
       return next;
     });
   }
@@ -597,6 +821,37 @@ function App() {
       products.forEach((item) => {
         if (item.hasPhoto && item.code) next[productKey(item)] = item.code;
       });
+      return next;
+    });
+    setSelectedProducts((current) => {
+      const next = { ...current };
+      products.forEach((item) => {
+        if (item.hasPhoto && item.code) next[item.code] = item;
+      });
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedItems({});
+    setSelectedProducts({});
+    setEditedPrices({});
+  }
+
+  function removeSelectedProduct(item) {
+    setSelectedItems((current) => {
+      const next = { ...current };
+      delete next[productKey(item)];
+      return next;
+    });
+    setSelectedProducts((current) => {
+      const next = { ...current };
+      delete next[item.code];
+      return next;
+    });
+    setEditedPrices((current) => {
+      const next = { ...current };
+      delete next[item.code];
       return next;
     });
   }
@@ -613,15 +868,24 @@ function App() {
     setGenerating(true);
     setError("");
     try {
+      const selectedCustomPrices = Object.fromEntries(
+        selectedCodes
+          .filter((code) => editedPrices[code] !== undefined && editedPrices[code] !== "")
+          .map((code) => [code, editedPrices[code]]),
+      );
       const response = await fetch(`${API_URL}/api/generate`, {
         method: "POST",
+        headers: authHeaders(),
         body: buildForm({
           selected_codes: JSON.stringify([...selectedCodes]),
           include_product_sheets: String(includeSheets),
+          include_prices: String(includePrices),
+          custom_prices: JSON.stringify(includePrices ? selectedCustomPrices : {}),
         }),
       });
       if (!response.ok) {
         const data = await response.json();
+        if (response.status === 401) logout();
         throw new Error(apiErrorMessage(data, "Falha ao gerar planilha."));
       }
 
@@ -647,6 +911,8 @@ function App() {
       window.setTimeout(() => setPrintingSelectedOnly(false), 250);
     }, 120);
   }
+
+  if (!session) return <LoginScreen onLogin={saveSession} />;
 
   return (
     <div className="app-layout">
@@ -686,17 +952,49 @@ function App() {
               <small>Associar fichas PDF ao Excel</small>
             </span>
           </button>
+          {session.user.role === "administrador" && (
+            <button
+              className={activeSection === "users" ? "active" : ""}
+              onClick={() => {
+                setActiveSection("users");
+                setError("");
+                loadUsers();
+              }}
+            >
+              <Users size={19} />
+              <span>
+                <strong>Usuários</strong>
+                <small>Contas, senhas e permissões</small>
+              </span>
+            </button>
+          )}
         </nav>
+        <div className="sidebar-session">
+          <span>{session.user.username}</span>
+          <small>{session.user.role}</small>
+          <button className="ghost" onClick={logout}>
+            <LogOut size={16} />
+            Sair
+          </button>
+        </div>
       </aside>
 
       <main className="app-shell">
       <header className="topbar">
         <div>
-          <h1>{activeSection === "generator" ? "Gerador de Excel com fotos" : "Preenchedor de planilha"}</h1>
+          <h1>
+            {activeSection === "generator"
+              ? "Gerador de Excel com fotos"
+              : activeSection === "filler"
+                ? "Preenchedor de planilha"
+                : "Gerenciamento de usuários"}
+          </h1>
           <p>
             {activeSection === "generator"
               ? "Veja os produtos com fotos, selecione itens e gere a planilha Excel."
-              : "Envie o Excel gerado e associe as fichas PDF na ordem das abas."}
+              : activeSection === "filler"
+                ? "Envie o Excel gerado e associe as fichas PDF na ordem das abas."
+                : "Crie contas e controle senhas, status e níveis de permissão."}
           </p>
         </div>
         {activeSection === "generator" && <div className="top-actions">
@@ -795,11 +1093,131 @@ function App() {
           Selecionar com foto
         </button>
 
-        <button className="ghost danger" onClick={() => setSelectedItems({})}>
+        <button className="ghost danger" onClick={clearSelection}>
           <Trash2 size={17} />
           Limpar selecao
         </button>
+
+        <button
+          className={includePrices ? "primary" : "ghost"}
+          onClick={() => {
+            if (!includePrices) {
+              setIncludePrices(true);
+              setIncludeSheets(true);
+              setPricePanelOpen(true);
+            } else {
+              setPricePanelOpen((current) => !current);
+            }
+          }}
+        >
+          <DollarSign size={17} />
+          {includePrices
+            ? pricePanelOpen ? "Ocultar preços" : "Gerenciar preços"
+            : "Adicionar preço"}
+        </button>
+
       </section>
+
+      {includePrices && pricePanelOpen && (
+        <section className="price-review-tool">
+          <div className="price-review-header">
+            <div>
+              <strong>Preços dos produtos selecionados</strong>
+              <span>{selectedPriceProducts.length} produto(s) nesta revisão</span>
+            </div>
+            <div className="price-review-actions">
+              <button className="ghost" onClick={() => setEditedPrices({})} disabled={!selectedPriceProducts.length}>
+                <RefreshCcw size={17} />
+                Restaurar originais
+              </button>
+              <button className="ghost" onClick={() => setPricePanelOpen(false)}>
+                <X size={17} />
+                Fechar
+              </button>
+            </div>
+          </div>
+
+          <div className="price-review-summary">
+            <span>Perfil: {session.user.role}</span>
+            <span>Selecionados: {selectedCount}</span>
+            <span>
+              Preços alterados: {Object.keys(editedPrices).filter((code) => selectedCodes.includes(code)).length}
+            </span>
+            <span className="warn">
+              {session.user.role === "vendedor"
+                ? "Vendedor pode apenas manter ou aumentar"
+                : "Reduções e aumentos permitidos"}
+            </span>
+          </div>
+
+          <div className="price-review-list">
+            <div className="price-review-row price-review-columns">
+              <span>Ação</span>
+              <span>Produto</span>
+              <span>Preço original</span>
+              <span>Novo preço</span>
+              <span>Diferença</span>
+            </div>
+            {selectedPriceProducts.map((item) => {
+              const currentPrice = Number(editedPrices[item.code] ?? item.originalPrice);
+              const difference = currentPrice - Number(item.originalPrice || 0);
+              return (
+                <div className="price-review-row" key={item.code}>
+                  <span>
+                    <button
+                      className="icon-button"
+                      onClick={() => removeSelectedProduct(item)}
+                      title="Remover da seleção"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </span>
+                  <span className="price-product-cell">
+                    <strong>{item.code} - {item.description}</strong>
+                    <small>{item.brand || item.supplier || "Sem marca"}</small>
+                  </span>
+                  <span>{formatPrice(item.originalPrice)}</span>
+                  <span>
+                    {item.originalPrice == null ? (
+                      <span className="warn">Preço não encontrado</span>
+                    ) : (
+                      <input
+                        className="price-review-input"
+                        type="number"
+                        min={session.user.role === "vendedor" ? item.originalPrice : 0.01}
+                        step="0.01"
+                        value={editedPrices[item.code] ?? item.originalPrice}
+                        onChange={(event) =>
+                          setEditedPrices((current) => ({
+                            ...current,
+                            [item.code]: event.target.value,
+                          }))
+                        }
+                      />
+                    )}
+                  </span>
+                  <span
+                    className={
+                      difference < 0
+                        ? "price-difference negative"
+                        : difference > 0
+                          ? "price-difference positive"
+                          : "price-difference"
+                    }
+                  >
+                    {Number.isFinite(difference) ? formatPrice(difference) : "-"}
+                  </span>
+                </div>
+              );
+            })}
+            {!selectedPriceProducts.length && (
+              <div className="price-review-empty">
+                Selecione produtos no catálogo para editar os preços aqui.
+              </div>
+            )}
+          </div>
+        </section>
+      )}
       </>}
 
       {activeSection === "filler" && (
@@ -1043,6 +1461,121 @@ function App() {
       </section>
       )}
 
+      {activeSection === "users" && session.user.role === "administrador" && (
+        <section className="users-tool">
+          <form className="user-form" onSubmit={saveUser}>
+            <div className="user-form-title">
+              {editingUserId ? <Pencil size={19} /> : <UserPlus size={19} />}
+              <strong>{editingUserId ? "Atualizar usuário" : "Novo usuário"}</strong>
+            </div>
+            <label>
+              Usuário
+              <input
+                value={userForm.username}
+                onChange={(event) => setUserForm((current) => ({ ...current, username: event.target.value }))}
+                required
+                minLength={3}
+              />
+            </label>
+            <label>
+              {editingUserId ? "Nova senha (opcional)" : "Senha"}
+              <input
+                type="password"
+                value={userForm.password}
+                onChange={(event) => setUserForm((current) => ({ ...current, password: event.target.value }))}
+                required={!editingUserId}
+                minLength={6}
+              />
+            </label>
+            <label>
+              Permissão
+              <select
+                value={userForm.role}
+                onChange={(event) => setUserForm((current) => ({ ...current, role: event.target.value }))}
+              >
+                <option value="vendedor">Vendedor</option>
+                <option value="supervisor">Supervisor</option>
+                <option value="administrador">Administrador</option>
+              </select>
+            </label>
+            {editingUserId && (
+              <label className="user-active-control">
+                <input
+                  type="checkbox"
+                  checked={userForm.active}
+                  onChange={(event) => setUserForm((current) => ({ ...current, active: event.target.checked }))}
+                />
+                Usuário ativo
+              </label>
+            )}
+            <div className="user-form-actions">
+              <button className="primary" type="submit" disabled={usersLoading}>
+                {usersLoading ? <Loader2 className="spin" size={17} /> : <UserPlus size={17} />}
+                {editingUserId ? "Salvar alterações" : "Criar usuário"}
+              </button>
+              {editingUserId && (
+                <button className="ghost" type="button" onClick={resetUserForm}>
+                  <X size={17} />
+                  Cancelar
+                </button>
+              )}
+            </div>
+          </form>
+
+          <div className="users-list">
+            <div className="users-list-header">
+              <strong>Usuários cadastrados</strong>
+              <button className="ghost" onClick={() => loadUsers()} disabled={usersLoading}>
+                <RefreshCcw className={usersLoading ? "spin" : ""} size={17} />
+                Atualizar
+              </button>
+            </div>
+            <div className="table-wrap">
+              <table className="users-table">
+                <thead>
+                  <tr>
+                    <th>Usuário</th>
+                    <th>Permissão</th>
+                    <th>Status</th>
+                    <th>Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((user) => (
+                    <tr key={user.id}>
+                      <td className="code-cell">{user.username}</td>
+                      <td className="role-cell">{user.role}</td>
+                      <td>
+                        <span className={user.active ? "user-status active" : "user-status inactive"}>
+                          {user.active ? "ATIVO" : "INATIVO"}
+                        </span>
+                      </td>
+                      <td className="user-actions">
+                        <button className="ghost" onClick={() => editUser(user)}>
+                          <Pencil size={16} />
+                          Editar
+                        </button>
+                        <button
+                          className="ghost danger"
+                          onClick={() => removeUser(user)}
+                          disabled={user.id === session.user.id}
+                        >
+                          <Trash2 size={16} />
+                          Excluir
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {!usersLoading && users.length === 0 && (
+                    <tr><td colSpan="4" className="empty-row">Nenhum usuário cadastrado.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      )}
+
       {error && <div className="alert">{error}</div>}
 
       {activeSection === "generator" && isLargeSheetGeneration && (
@@ -1141,6 +1674,7 @@ function App() {
                 <th>Descricao</th>
                 <th>Fornecedor</th>
                 <th>Marca</th>
+                <th>Preço</th>
                 <th>Foto</th>
               </tr>
             </thead>
@@ -1161,6 +1695,7 @@ function App() {
                   <td>{item.description}</td>
                   <td>{item.supplier}</td>
                   <td>{item.brand}</td>
+                  <td>{formatPrice(item.originalPrice)}</td>
                   <td>
                     <span className={item.hasPhoto ? "photo yes" : "photo no"}>
                       {item.hasPhoto ? "SIM" : "NAO"}
@@ -1171,12 +1706,12 @@ function App() {
               })}
               {!loading && products.length === 0 && (
                 <tr>
-                  <td colSpan="6" className="empty-row">Nenhum produto carregado.</td>
+                  <td colSpan="7" className="empty-row">Nenhum produto carregado.</td>
                 </tr>
               )}
               {loading && (
                 <tr>
-                  <td colSpan="6" className="empty-row">Carregando produtos...</td>
+                  <td colSpan="7" className="empty-row">Carregando produtos...</td>
                 </tr>
               )}
             </tbody>

@@ -29,6 +29,8 @@ DEFAULT_ZIP = BASE_DIR / "data/Fotos Cod-20260430T175121Z-3-001.zip"
 DEFAULT_PHOTOS = BASE_DIR / "Fotos Cod"
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 TEMPLATE_SUFFIX = "FICHA CADASTRO PRODUTO C&M.xlsx"
+PRICE_FILE = BASE_DIR / "preço.xlsx"
+DEFAULT_PRICE_REGION = 1
 MATCH_STOP_TOKENS = {
     "FICHA",
     "FICHAS",
@@ -1319,8 +1321,36 @@ def build_search_text(row):
         summary["brand"],
     ]).lower()
 
+def read_product_prices(region=DEFAULT_PRICE_REGION):
+    if not PRICE_FILE.exists():
+        raise ValueError(f"Planilha de preços não encontrada: {PRICE_FILE.name}")
 
-def preencher_ficha_template(ficha, row, code, sheet_image):
+    wb = load_workbook(PRICE_FILE, read_only=True, data_only=True)
+    ws = wb["preço"] if "preço" in wb.sheetnames else wb.active
+
+    headers = {
+        normalize_key(cell.value): index
+        for index, cell in enumerate(next(ws.iter_rows()))
+    }
+
+    code_index = headers["codprod"]
+    region_index = headers["numregiao"]
+    price_index = headers["precovenda"]
+
+    prices = {}
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        code = normalize_code(row[code_index])
+        row_region = row[region_index]
+        price = row[price_index]
+
+        if code and str(row_region) == str(region) and price is not None:
+            prices[code] = price
+
+    wb.close()
+    return prices
+
+def preencher_ficha_template(ficha, row, code, sheet_image, price=None):
     descricao = row_summary(row)["description"]
     marca = val(row, "Marca")
     embalagem = val(row, "Embalagem")
@@ -1347,22 +1377,24 @@ def preencher_ficha_template(ficha, row, code, sheet_image):
 
     ficha["B14"] = marca
     ficha["B15"] = descricao
-    ficha["B17"] = ncm
-    ficha["B18"] = cest
-    ficha["B19"] = "0,00"
-    ficha["B20"] = "0"
-    ficha["B21"] = "Nacional"
-    ficha["B22"] = "CIF"
+    ficha["B16"] = price if price is not None else ""
+    ficha["B16"].number_format = 'R$ #,##0.00'
+    ficha["B18"] = ncm
+    ficha["B19"] = cest
+    ficha["B20"] = "0,00"
+    ficha["B21"] = "0"
+    ficha["B22"] = "Nacional"
+    ficha["B23"] = "CIF"
     ficha["B24"] = embalagem
-    ficha["B25"] = altura
-    ficha["B26"] = largura
-    ficha["B27"] = comprimento
-    ficha["B28"] = peso_liq
-    ficha["B29"] = peso_bruto
-    ficha["D28"] = validade
-    ficha["A31"] = descricao
-    ficha["D31"] = code
-    ficha["F31"] = ean
+    ficha["B26"] = altura
+    ficha["B27"] = largura
+    ficha["B28"] = comprimento
+    ficha["B29"] = peso_liq
+    ficha["B30"] = peso_bruto
+    ficha["D29"] = validade
+    ficha["A32"] = descricao
+    ficha["D32"] = code
+    ficha["F32"] = ean
     ficha["B46"] = ncm
     ficha._images = []
 
@@ -1480,6 +1512,8 @@ def list_products(
     end = start + page_size
     products = []
 
+    prices = read_product_prices() if PRICE_FILE.exists() else {}
+
     for row in filtered_rows[start:end]:
         code = row_code(row)
         photo_data_url = ""
@@ -1488,7 +1522,9 @@ def list_products(
             photo_version = photo_file_version(preferred_image_name(code, folder_mapping[code]))
         if code not in folder_mapping:
             photo_data_url = zip_preview_data_url(code, zip_file, zip_mapping)
-        products.append(row_summary(row, image_codes, photo_data_url, photo_version))
+        item = row_summary(row, image_codes, photo_data_url, photo_version)
+        item["originalPrice"] = prices.get(code)
+        products.append(item)
 
     return {
         "total": len(rows),
@@ -1509,6 +1545,7 @@ def create_workbook_bytes(
     zip_mapping,
     folder_mapping,
     include_product_sheets=True,
+    price_by_code=None,
 ):
     with TemporaryDirectory(prefix="produto_fotos_") as temp_dir:
         return _create_workbook_bytes(
@@ -1518,6 +1555,7 @@ def create_workbook_bytes(
             folder_mapping,
             temp_dir,
             include_product_sheets,
+            price_by_code=price_by_code,
         )
 
 
@@ -1528,7 +1566,9 @@ def _create_workbook_bytes(
     folder_mapping,
     temp_dir,
     include_product_sheets=True,
+    price_by_code=None,
 ):
+    price_by_code = price_by_code or {}
     template_file = find_template_file()
     if template_file.exists():
         wb = load_workbook(template_file)
@@ -1623,7 +1663,13 @@ def _create_workbook_bytes(
         )
         ficha = wb.copy_worksheet(modelo)
         ficha.title = nome_aba
-        preencher_ficha_template(ficha, row, code, excel_images.get("sheet"))
+        preencher_ficha_template(
+            ficha,
+            row,
+            code,
+            excel_images.get("sheet"),
+            price_by_code.get(code),
+        )
 
     if modelo.title in wb.sheetnames:
         del wb[modelo.title]
@@ -1641,6 +1687,8 @@ def generate_workbook_for_codes(
     include_product_sheets=True,
     supplier_pdf_bytes=None,
     supplier_pdf_folder_path="",
+    include_prices=False,
+    price_overrides=None,
 ):
     rows, zip_file, zip_mapping, folder_mapping = load_inputs(csv_bytes, zip_bytes, folder_path)
     selected = set(normalize_code(code) for code in selected_codes)
@@ -1659,6 +1707,8 @@ def generate_workbook_for_codes(
             else row
             for row in selected_rows
         ]
+    price_by_code = read_product_prices() if include_prices else {}
+    price_by_code.update(price_overrides or {})
 
     return create_workbook_bytes(
         selected_rows,
@@ -1666,4 +1716,5 @@ def generate_workbook_for_codes(
         zip_mapping,
         folder_mapping,
         include_product_sheets,
+        price_by_code=price_by_code,
     )

@@ -1,10 +1,23 @@
 import json
+from decimal import Decimal, InvalidOperation
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel
 
+from auth import (
+    authenticate,
+    create_token,
+    create_user,
+    delete_user,
+    list_users,
+    require_admin,
+    require_user,
+    token_user,
+    update_user,
+)
 from core import (
     analyze_supplier_pdf_folder,
     extract_supplier_pdf_data,
@@ -16,11 +29,25 @@ from core import (
     load_inputs,
     ordered_pdf_folder_suggestions,
     ordered_pdf_preview,
+    read_product_prices,
     read_pdf_files_from_folder_selection,
 )
 
 
 app = FastAPI(title="Sistema de Produtos API")
+
+
+class UserCreateRequest(BaseModel):
+    username: str
+    password: str
+    role: str
+
+
+class UserUpdateRequest(BaseModel):
+    username: str | None = None
+    password: str | None = None
+    role: str | None = None
+    active: bool | None = None
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,6 +78,82 @@ async def read_pdf_files(files: list[UploadFile] | None):
 def health():
     return {"ok": True}
 
+
+@app.post("/api/login")
+def login(
+    username: Annotated[str, Form()],
+    password: Annotated[str, Form()],
+):
+    user = authenticate(username, password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Usuário ou senha inválidos.")
+    try:
+        token = create_token(user)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "token": token,
+        "user": {"id": user["id"], "username": user["username"], "role": user["role"]},
+    }
+
+
+@app.get("/api/me")
+def me(current_user: dict = Depends(require_user)):
+    return {"username": current_user["username"], "role": current_user["role"]}
+
+
+@app.get("/api/users")
+def users_list(current_user: dict = Depends(require_admin)):
+    return {"users": list_users()}
+
+
+@app.post("/api/users", status_code=201)
+def users_create(
+    request: UserCreateRequest,
+    current_user: dict = Depends(require_admin),
+):
+    try:
+        return create_user(request.username, request.password, request.role)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/users/{user_id}")
+def users_update(
+    user_id: int,
+    request: UserUpdateRequest,
+    current_user: dict = Depends(require_admin),
+):
+    if user_id == current_user["id"] and (
+        request.active is False
+        or (request.role is not None and request.role != "administrador")
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Você não pode desativar ou remover a própria permissão de administrador.",
+        )
+    try:
+        updated = update_user(
+            user_id,
+            username=request.username,
+            role=request.role,
+            active=request.active,
+            password=request.password,
+        )
+        if user_id == current_user["id"]:
+            updated["token"] = create_token(token_user(user_id))
+        return updated
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/users/{user_id}", status_code=204)
+def users_delete(user_id: int, current_user: dict = Depends(require_admin)):
+    try:
+        delete_user(user_id, current_user["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(status_code=204)
 
 @app.get("/api/photo/{code}")
 def photo(code: str, folder_path: str = Query(default="")):
@@ -207,6 +310,7 @@ async def products(
     only_with_photo: Annotated[bool, Form()] = False,
     page: Annotated[int, Form()] = 1,
     page_size: Annotated[int, Form()] = 120,
+    current_user: dict = Depends(require_user),
 ):
     try:
         return list_products(
@@ -226,14 +330,46 @@ async def products(
 async def generate(
     selected_codes: Annotated[str, Form()],
     include_product_sheets: Annotated[bool, Form()] = True,
+    include_prices: Annotated[bool, Form()] = False,
     csv_file: Annotated[UploadFile | None, File()] = None,
     zip_file: Annotated[UploadFile | None, File()] = None,
     supplier_pdf_file: Annotated[UploadFile | None, File()] = None,
     supplier_pdf_folder_path: Annotated[str, Form()] = "",
     folder_path: Annotated[str, Form()] = "",
+    custom_prices: Annotated[str, Form()] = "{}",
+    current_user: dict = Depends(require_user),
 ):
     try:
         codes = json.loads(selected_codes)
+        original_prices = read_product_prices()
+        received_prices = json.loads(custom_prices) if include_prices else {}
+        if not isinstance(received_prices, dict):
+            raise ValueError("Preços personalizados inválidos.")
+        validated_prices = {}
+
+        for code, value in received_prices.items():
+            code = str(code).strip()
+            if code not in {str(selected_code) for selected_code in codes}:
+                continue
+            original = original_prices.get(code)
+
+            if original is None:
+                raise ValueError(f"Preço original não encontrado para o produto {code}.")
+
+            try:
+                new_price = Decimal(str(value).replace(",", "."))
+            except (InvalidOperation, ValueError):
+                raise ValueError(f"Preço inválido para o produto {code}.")
+
+            if not new_price.is_finite() or new_price <= 0:
+                raise ValueError("O preço deve ser maior que zero.")
+
+            if current_user["role"] == "vendedor" and new_price < Decimal(str(original)):
+                raise ValueError(
+                    f"Vendedores não podem reduzir o preço do produto {code}."
+                )
+            validated_prices[code] = float(new_price)
+
         data = generate_workbook_for_codes(
             codes,
             csv_bytes=await read_optional_file(csv_file),
@@ -242,6 +378,8 @@ async def generate(
             include_product_sheets=include_product_sheets,
             supplier_pdf_bytes=await read_optional_file(supplier_pdf_file),
             supplier_pdf_folder_path=supplier_pdf_folder_path,
+            include_prices=include_prices,
+            price_overrides=validated_prices if include_prices else {},
         )
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="Selecao invalida.") from exc

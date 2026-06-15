@@ -86,6 +86,30 @@ body {
   gap: 8px;
 }
 
+.sidebar-session {
+  margin-top: auto;
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  background: #151b1d;
+}
+
+.sidebar-session span {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.sidebar-session small {
+  color: var(--accent);
+  text-transform: capitalize;
+}
+
+.sidebar-session button {
+  width: 100%;
+  margin-top: 7px;
+}
+
 .sidebar-nav button {
   width: 100%;
   min-height: 66px;
@@ -218,6 +242,265 @@ label.file-control {
   padding: 14px;
   margin-bottom: 14px;
   box-shadow: 0 1px 0 rgb(255 255 255 / 0.03) inset;
+}
+
+.price-review-tool {
+  display: grid;
+  gap: 14px;
+  width: 100%;
+  margin-bottom: 14px;
+  border: 1px solid #354347;
+  padding: 16px;
+  background: #121719;
+  box-shadow: var(--shadow);
+}
+
+.price-review-header,
+.price-review-actions,
+.price-review-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.price-review-header {
+  justify-content: space-between;
+}
+
+.price-review-header > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.price-review-header strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.price-review-header span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.price-review-summary span {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 10px;
+  color: #d7dfdc;
+  background: #0f1416;
+  font-size: 12px;
+}
+
+.price-review-summary span.warn {
+  color: #ffd789;
+}
+
+.price-review-list {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.price-review-row {
+  display: grid;
+  grid-template-columns: 56px minmax(260px, 2fr) minmax(130px, 0.7fr) minmax(140px, 0.8fr) minmax(120px, 0.7fr);
+  gap: 12px;
+  align-items: center;
+  min-width: 760px;
+  border: 1px solid #36503e;
+  padding: 9px 10px;
+  background: #151d19;
+  color: #dfe6e3;
+  font-size: 13px;
+}
+
+.price-review-columns {
+  border: 0;
+  padding-top: 0;
+  padding-bottom: 2px;
+  background: transparent;
+  color: #81948d;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.price-review-list {
+  overflow-x: auto;
+}
+
+.price-product-cell {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.price-product-cell strong,
+.price-product-cell small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.price-product-cell small {
+  color: var(--muted);
+}
+
+.price-review-input {
+  width: 130px;
+  height: 36px;
+  border: 1px solid #53645f;
+  padding: 0 9px;
+  background: #0d1213;
+  color: var(--text);
+}
+
+.price-review-input:focus {
+  border-color: var(--accent);
+  outline: 0;
+}
+
+.price-difference {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.price-difference.positive {
+  color: #bdf6a8;
+}
+
+.price-difference.negative {
+  color: #ffc5bc;
+}
+
+.price-review-empty {
+  min-height: 100px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+}
+
+.users-tool {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.user-form,
+.users-list {
+  border: 1px solid var(--line-soft);
+  padding: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.user-form {
+  display: grid;
+  gap: 14px;
+}
+
+.user-form-title,
+.users-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.user-form-title {
+  justify-content: flex-start;
+  color: var(--accent);
+}
+
+.user-form-title strong,
+.users-list-header strong {
+  color: var(--text);
+}
+
+.user-form > label {
+  display: grid;
+  gap: 6px;
+  color: #dce3e0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.user-form input,
+.user-form select {
+  width: 100%;
+  height: 40px;
+  border: 1px solid var(--line);
+  padding: 0 10px;
+  background: #0f1416;
+  color: var(--text);
+}
+
+.user-form input:focus,
+.user-form select:focus {
+  border-color: var(--accent);
+  outline: 0;
+}
+
+.user-form .user-active-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.user-form .user-active-control input {
+  width: auto;
+  height: auto;
+}
+
+.user-form-actions,
+.user-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.users-list {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.users-table {
+  min-width: 650px;
+}
+
+.role-cell {
+  text-transform: capitalize;
+}
+
+.user-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.user-status.active {
+  border-color: #4c7c41;
+  background: #1a2a18;
+  color: #bdf6a8;
+}
+
+.user-status.inactive {
+  border-color: #7d4038;
+  background: #2d1d1b;
+  color: #ffc5bc;
 }
 
 .pagination-band {
@@ -717,6 +1000,97 @@ td input {
   white-space: nowrap;
 }
 
+.price-editor {
+  width: 100%;
+  display: grid;
+  gap: 7px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.price-editor small {
+  color: var(--muted);
+}
+
+.price-editor label {
+  display: grid;
+  gap: 5px;
+  color: #dce3e0;
+  font-size: 12px;
+}
+
+.price-editor input {
+  width: 100%;
+  min-width: 110px;
+  height: 36px;
+  border: 1px solid var(--line);
+  padding: 0 9px;
+  background: #0f1416;
+  color: var(--text);
+}
+
+.price-editor input:focus {
+  border-color: var(--accent);
+  outline: 0;
+}
+
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-card {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 18px;
+  border: 1px solid var(--line);
+  padding: 28px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  color: var(--accent);
+}
+
+.login-brand h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: 23px;
+}
+
+.login-brand p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.login-card > label {
+  display: grid;
+  gap: 7px;
+  color: #dce3e0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.login-card > label input {
+  height: 42px;
+  border: 1px solid var(--line);
+  padding: 0 11px;
+  background: #0f1416;
+  color: var(--text);
+}
+
+.login-card > label input:focus {
+  border-color: var(--accent);
+  outline: 0;
+}
+
 .empty-panel {
   grid-column: 1 / -1;
   min-height: 170px;
@@ -809,6 +1183,20 @@ tbody tr:hover {
 }
 
 @media (max-width: 760px) {
+  .users-tool {
+    grid-template-columns: 1fr;
+  }
+
+  .price-review-header,
+  .price-review-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .price-review-actions button {
+    width: 100%;
+  }
+
   .app-layout {
     display: block;
   }
@@ -821,6 +1209,10 @@ tbody tr:hover {
     padding: 14px 12px;
     border-right: 0;
     border-bottom: 1px solid var(--line-soft);
+  }
+
+  .sidebar-session {
+    margin-top: 0;
   }
 
   .sidebar-nav {

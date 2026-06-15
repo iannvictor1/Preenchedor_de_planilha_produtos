@@ -10,6 +10,9 @@ frontend-react/.env.local
 venv/
 
 *.log
+users.db
+users.db-shm
+users.db-wal
 
 # Dados locais grandes ou especificos da instalacao
 Fotos Cod/
