@@ -115,6 +115,14 @@ Para disparar do computador de desenvolvimento para a producao, habilite PowerSh
 .\scripts\atualizar_remoto.ps1 -ComputerName "NOME-OU-IP-DA-PRODUCAO" -ProjectDir "C:\sistema_produtos" -BackendTask "SistemaProdutosBackend"
 ```
 
+Se a producao tiver alteracoes locais rastreadas, revise-as primeiro. Para guarda-las em um `git stash` de backup e prosseguir com a atualizacao:
+
+```powershell
+.\scripts\atualizar_remoto.ps1 -ComputerName "NOME-OU-IP-DA-PRODUCAO" -ProjectDir "C:\sistema_produtos" -UserName "DOMINIO\usuario" -StashLocalChanges
+```
+
+O backup nao e reaplicado automaticamente. Para lista-lo depois na producao, use `git stash list`.
+
 O script faz:
 
 - `git pull`
