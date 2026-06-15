@@ -520,16 +520,105 @@ label.file-control {
 }
 
 .ordered-pdf-controls {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 12px;
+}
+
+.filler-control-row {
+  display: flex;
   align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pdf-controls-row {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
+.pdf-controls-row > * {
+  flex: 0 0 auto;
+}
+
+.pdf-controls-row .pdf-folder-menu {
+  margin-left: 0;
+}
+
+.xml-controls-row {
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
 }
 
 .ordered-preview {
   display: grid;
   gap: 12px;
   min-width: 0;
+}
+
+.xml-cest-preview {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 14px;
+}
+
+.xml-cest-list {
+  display: grid;
+  gap: 7px;
+  overflow-x: auto;
+}
+
+.xml-cest-row {
+  min-width: 980px;
+  display: grid;
+  grid-template-columns: 54px minmax(230px, 1.3fr) minmax(280px, 1.6fr) 150px 150px 100px;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #354347;
+  padding: 9px 10px;
+  background: #141a1c;
+  color: #dce3e0;
+  font-size: 13px;
+}
+
+.xml-cest-row.matched {
+  border-color: #36503e;
+  background: #151d19;
+}
+
+.xml-cest-header {
+  border: 0;
+  padding-top: 0;
+  padding-bottom: 2px;
+  background: transparent;
+  color: #81948d;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.xml-product-cell {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.xml-product-cell strong,
+.xml-product-cell small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.xml-product-cell small {
+  color: var(--muted);
+}
+
+.xml-cest-value {
+  color: #bdf6a8;
+  font-weight: 750;
 }
 
 .pagination-band span {
@@ -566,10 +655,6 @@ label.file-control {
   max-width: 190px;
 }
 
-.pdf-folder-input {
-  flex: 1 1 320px;
-}
-
 .file-control span {
   min-width: 0;
   overflow: hidden;
@@ -592,6 +677,55 @@ label.file-control {
 
 .ordered-pdf-controls button {
   min-height: 46px;
+}
+
+.pdf-folder-menu {
+  position: relative;
+  margin-left: auto;
+}
+
+.pdf-folder-menu > button {
+  width: 46px;
+  padding: 0;
+}
+
+.pdf-folder-menu > button.active {
+  border-color: #60706c;
+  background: #1b2325;
+  color: var(--accent);
+}
+
+.pdf-folder-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 50;
+  width: min(520px, calc(100vw - 40px));
+  display: grid;
+  gap: 12px;
+  border: 1px solid #43504d;
+  padding: 14px;
+  background: #151b1d;
+  box-shadow: var(--shadow);
+}
+
+.pdf-folder-popover > label {
+  display: grid;
+  gap: 7px;
+  color: #dce3e0;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.pdf-folder-popover .folder-input {
+  width: 100%;
+  min-height: 42px;
+}
+
+.pdf-folder-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .search-input {
@@ -1183,6 +1317,19 @@ tbody tr:hover {
 }
 
 @media (max-width: 760px) {
+  .filler-control-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pdf-controls-row {
+    overflow-x: visible;
+  }
+
+  .filler-control-row > button {
+    width: 100%;
+  }
+
   .users-tool {
     grid-template-columns: 1fr;
   }
@@ -1266,6 +1413,26 @@ tbody tr:hover {
     flex: 1 1 100%;
     max-width: none;
     width: 100%;
+  }
+
+  .pdf-folder-menu {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .pdf-folder-menu > button {
+    width: 100%;
+  }
+
+  .pdf-folder-popover {
+    right: auto;
+    left: 0;
+    width: 100%;
+  }
+
+  .pdf-folder-popover-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

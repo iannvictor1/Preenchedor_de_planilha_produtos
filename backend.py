@@ -22,11 +22,13 @@ from core import (
     analyze_supplier_pdf_folder,
     extract_supplier_pdf_data,
     fill_workbook_with_ordered_pdfs,
+    fill_workbook_with_nfe_cest,
     find_photo_for_code,
     generate_workbook_for_codes,
     inspect_pdf_from_folder,
     list_products,
     load_inputs,
+    nfe_xml_cest_preview,
     ordered_pdf_folder_suggestions,
     ordered_pdf_preview,
     read_product_prices,
@@ -71,6 +73,15 @@ async def read_pdf_files(files: list[UploadFile] | None):
         data = await file.read()
         if data:
             out.append({"name": file.filename or "ficha.pdf", "data": data})
+    return out
+
+
+async def read_uploaded_files(files: list[UploadFile] | None, default_name: str):
+    out = []
+    for file in files or []:
+        data = await file.read()
+        if data:
+            out.append({"name": file.filename or default_name, "data": data})
     return out
 
 
@@ -214,6 +225,47 @@ async def excel_pdf_order_preview(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/excel-xml-cest/preview")
+async def excel_xml_cest_preview(
+    workbook_file: Annotated[UploadFile | None, File()] = None,
+    xml_files: Annotated[list[UploadFile], File()] = [],
+):
+    try:
+        return nfe_xml_cest_preview(
+            await read_optional_file(workbook_file),
+            await read_uploaded_files(xml_files, "nota.xml"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/excel-xml-cest/fill")
+async def excel_xml_cest_fill(
+    selected_indexes: Annotated[str, Form()] = "[]",
+    workbook_file: Annotated[UploadFile | None, File()] = None,
+    xml_files: Annotated[list[UploadFile], File()] = [],
+):
+    try:
+        indexes = json.loads(selected_indexes)
+        if not isinstance(indexes, list):
+            raise ValueError("Seleção de CEST inválida.")
+        data = fill_workbook_with_nfe_cest(
+            await read_optional_file(workbook_file),
+            await read_uploaded_files(xml_files, "nota.xml"),
+            indexes,
+        )
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Seleção de CEST inválida.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="produtos_com_cest.xlsx"'},
+    )
 
 
 @app.post("/api/excel-pdf-order/suggest-folder")

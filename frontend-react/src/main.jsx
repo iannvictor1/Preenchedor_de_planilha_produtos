@@ -6,6 +6,7 @@ import {
   ArrowDown,
   ArrowUp,
   FileText,
+  FileCode2,
   FileSpreadsheet,
   FolderOpen,
   GripVertical,
@@ -14,6 +15,7 @@ import {
   List,
   Loader2,
   LogOut,
+  MoreHorizontal,
   Pencil,
   Plus,
   RefreshCcw,
@@ -33,6 +35,7 @@ import "./styles.css";
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 const MANY_SHEETS_LIMIT = 200;
 const PAGE_SIZE = 120;
+const DEFAULT_SUPPLIER_PDF_FOLDER = "Fichas-20260609T161612Z-3-001\\Fichas";
 const KNOWN_BRANDS = [
   "CARAPRETA",
   "ALFAMA",
@@ -254,17 +257,23 @@ function App() {
   const orderedWorkbookInputRef = useRef(null);
   const orderedPdfInputRef = useRef(null);
   const orderedAddPdfInputRef = useRef(null);
+  const xmlInputRef = useRef(null);
   const [csvFile, setCsvFile] = useState(null);
   const [zipFile, setZipFile] = useState(null);
   const [orderedWorkbookFile, setOrderedWorkbookFile] = useState(null);
   const [orderedPdfFiles, setOrderedPdfFiles] = useState([]);
-  const [supplierPdfFolderPath, setSupplierPdfFolderPath] = useState("Fichas-20260609T161612Z-3-001\\Fichas");
+  const [supplierPdfFolderPath, setSupplierPdfFolderPath] = useState(DEFAULT_SUPPLIER_PDF_FOLDER);
+  const [showPdfFolderEditor, setShowPdfFolderEditor] = useState(false);
   const [orderedPreview, setOrderedPreview] = useState(null);
   const [orderedPreviewStale, setOrderedPreviewStale] = useState(false);
   const [draggedOrderedIndex, setDraggedOrderedIndex] = useState(null);
   const [dragOverOrderedIndex, setDragOverOrderedIndex] = useState(null);
   const [orderedLoading, setOrderedLoading] = useState(false);
   const [orderedFilling, setOrderedFilling] = useState(false);
+  const [xmlFiles, setXmlFiles] = useState([]);
+  const [xmlPreview, setXmlPreview] = useState(null);
+  const [xmlLoading, setXmlLoading] = useState(false);
+  const [xmlFilling, setXmlFilling] = useState(false);
   const [folderPath, setFolderPath] = useState("");
   const [search, setSearch] = useState("");
   const [showWithoutPhoto, setShowWithoutPhoto] = useState(false);
@@ -452,6 +461,14 @@ function App() {
     return form;
   }
 
+  function buildXmlCestForm(extra = {}) {
+    const form = new FormData();
+    if (orderedWorkbookFile) form.append("workbook_file", orderedWorkbookFile);
+    xmlFiles.forEach((file) => form.append("xml_files", file));
+    Object.entries(extra).forEach(([key, value]) => form.append(key, value));
+    return form;
+  }
+
   function refreshFolderPreviewStats(previewData) {
     if (!previewData?.items) return previewData;
     const selectedCount = previewData.items.filter((item) => item.selected && item.suggestedFile).length;
@@ -605,9 +622,72 @@ function App() {
     setOrderedPreviewStale(false);
     setDraggedOrderedIndex(null);
     setDragOverOrderedIndex(null);
-    [orderedWorkbookInputRef, orderedPdfInputRef, orderedAddPdfInputRef].forEach((inputRef) => {
+    setXmlFiles([]);
+    setXmlPreview(null);
+    [orderedWorkbookInputRef, orderedPdfInputRef, orderedAddPdfInputRef, xmlInputRef].forEach((inputRef) => {
       if (inputRef.current) inputRef.current.value = "";
     });
+  }
+
+  async function previewXmlCest() {
+    if (!orderedWorkbookFile || !xmlFiles.length) return;
+    setXmlLoading(true);
+    setXmlPreview(null);
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/api/excel-xml-cest/preview`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: buildXmlCestForm(),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(apiErrorMessage(data, "Falha ao conferir CEST dos XMLs."));
+      setXmlPreview(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setXmlLoading(false);
+    }
+  }
+
+  function toggleXmlCestItem(index) {
+    setXmlPreview((current) => ({
+      ...current,
+      items: current.items.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, selected: !item.selected } : item,
+      ),
+    }));
+  }
+
+  async function fillWorkbookWithXmlCest() {
+    if (!orderedWorkbookFile || !xmlFiles.length || !xmlPreview) return;
+    setXmlFilling(true);
+    setError("");
+    try {
+      const selectedIndexes = xmlPreview.items
+        .map((item, index) => (item.selected ? index : null))
+        .filter((index) => index !== null);
+      const response = await fetch(`${API_URL}/api/excel-xml-cest/fill`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: buildXmlCestForm({ selected_indexes: JSON.stringify(selectedIndexes) }),
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(apiErrorMessage(data, "Falha ao preencher CEST no Excel."));
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "produtos_com_cest.xlsx";
+      link.click();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setXmlFilling(false);
+    }
   }
 
   async function loadProducts(next = {}) {
@@ -1224,6 +1304,7 @@ function App() {
       {activeSection === "filler" && (
       <section className="ordered-pdf-tool">
         <div className="ordered-pdf-controls">
+          <div className="filler-control-row pdf-controls-row">
           <label className="file-control">
             <FileSpreadsheet size={17} />
             <span>{orderedWorkbookFile ? orderedWorkbookFile.name : "Excel gerado"}</span>
@@ -1234,6 +1315,7 @@ function App() {
               onChange={(event) => {
                 setOrderedWorkbookFile(event.target.files?.[0] || null);
                 setOrderedPreview(null);
+                setXmlPreview(null);
                 event.target.value = "";
               }}
             />
@@ -1273,15 +1355,6 @@ function App() {
             />
           </label>
 
-          <label className="folder-input pdf-folder-input">
-            <FolderOpen size={17} />
-            <input
-              value={supplierPdfFolderPath}
-              onChange={(event) => setSupplierPdfFolderPath(event.target.value)}
-              placeholder="Pasta das fichas PDF"
-            />
-          </label>
-
           <button
             className="ghost"
             onClick={suggestOrderedPdfsFromFolder}
@@ -1309,6 +1382,45 @@ function App() {
             Organizar por nome
           </button>
 
+          <div className="pdf-folder-menu">
+            <button
+              className={showPdfFolderEditor ? "ghost active" : "ghost"}
+              onClick={() => setShowPdfFolderEditor((current) => !current)}
+              title="Configurar pasta padrão das fichas"
+              aria-label="Configurar pasta das fichas PDF"
+            >
+              <MoreHorizontal size={19} />
+            </button>
+            {showPdfFolderEditor && (
+              <div className="pdf-folder-popover">
+                <label>
+                  <span>Pasta das fichas PDF</span>
+                  <div className="folder-input">
+                    <FolderOpen size={17} />
+                    <input
+                      value={supplierPdfFolderPath}
+                      onChange={(event) => setSupplierPdfFolderPath(event.target.value)}
+                      placeholder="Pasta das fichas PDF"
+                    />
+                  </div>
+                </label>
+                <div className="pdf-folder-popover-actions">
+                  <button
+                    className="ghost"
+                    onClick={() => setSupplierPdfFolderPath(DEFAULT_SUPPLIER_PDF_FOLDER)}
+                  >
+                    <RefreshCcw size={16} />
+                    Restaurar padrão
+                  </button>
+                  <button className="primary" onClick={() => setShowPdfFolderEditor(false)}>
+                    <Check size={16} />
+                    Concluir
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           <button
             className="primary"
             onClick={fillWorkbookByPdfOrder}
@@ -1332,7 +1444,92 @@ function App() {
             <X size={17} />
             Cancelar
           </button>
+          </div>
+
+          <div className="filler-control-row xml-controls-row">
+            <label className="file-control">
+              <FileCode2 size={17} />
+              <span>{xmlFiles.length ? `${xmlFiles.length} XML(s) da NF-e` : "XMLs para buscar CEST"}</span>
+              <input
+                ref={xmlInputRef}
+                type="file"
+                accept=".xml,text/xml,application/xml"
+                multiple
+                onChange={(event) => {
+                  setXmlFiles(Array.from(event.target.files || []));
+                  setXmlPreview(null);
+                  event.target.value = "";
+                }}
+              />
+            </label>
+
+            <button
+              className="secondary"
+              onClick={previewXmlCest}
+              disabled={xmlLoading || !orderedWorkbookFile || !xmlFiles.length}
+            >
+              {xmlLoading ? <Loader2 className="spin" size={17} /> : <Search size={17} />}
+              Conferir CEST
+            </button>
+
+            <button
+              className="primary"
+              onClick={fillWorkbookWithXmlCest}
+              disabled={xmlFilling || !xmlPreview?.items?.some((item) => item.selected)}
+            >
+              {xmlFilling ? <Loader2 className="spin" size={17} /> : <Download size={17} />}
+              Baixar Excel com CEST
+            </button>
+          </div>
         </div>
+
+        {xmlPreview && (
+          <div className="xml-cest-preview">
+            <div className="pdf-analysis-summary">
+              <span>Abas: {xmlPreview.sheetCount}</span>
+              <span>XMLs: {xmlPreview.xmlCount}</span>
+              <span>Itens nos XMLs: {xmlPreview.xmlItemCount}</span>
+              <span className="ok">Pareados: {xmlPreview.items.filter((item) => item.selected).length}</span>
+              <span className={xmlPreview.missingCestCount ? "warn" : "ok"}>
+                Sem CEST: {xmlPreview.missingCestCount}
+              </span>
+            </div>
+
+            <div className="xml-cest-list">
+              <div className="xml-cest-row xml-cest-header">
+                <span>Usar</span>
+                <span>Ficha no Excel</span>
+                <span>Produto no XML</span>
+                <span>Correspondência</span>
+                <span>EAN</span>
+                <span>CEST</span>
+              </div>
+              {xmlPreview.items.map((item, index) => (
+                <div className={`xml-cest-row ${item.cest ? "matched" : ""}`} key={`${item.sheetName}-${index}`}>
+                  <span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(item.selected)}
+                      disabled={!item.cest}
+                      onChange={() => toggleXmlCestItem(index)}
+                    />
+                  </span>
+                  <span className="xml-product-cell">
+                    <strong>{item.productCode || item.index}. {item.productDescription || item.sheetName}</strong>
+                    <small>{item.sheetName}</small>
+                  </span>
+                  <span className="xml-product-cell">
+                    <strong>{item.xmlDescription || "Produto não encontrado"}</strong>
+                    <small>{item.xmlName ? `${item.xmlName} - item ${item.xmlItem}` : "Sem correspondência"}</small>
+                  </span>
+                  <span>{item.matchMethod ? `${item.matchMethod} (${item.score}%)` : "Não encontrado"}</span>
+                  <span>{item.ean || item.productEan || "Sem GTIN"}</span>
+                  <span className={item.cest ? "xml-cest-value" : "warn"}>{item.cest || "-"}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {orderedPreview && (
           <div className="ordered-preview">

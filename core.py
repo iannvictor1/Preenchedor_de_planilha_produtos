@@ -6,6 +6,7 @@ import os
 import re
 import unicodedata
 import zipfile
+import xml.etree.ElementTree as ET
 from functools import lru_cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -472,6 +473,169 @@ def apply_supplier_pdf_data(row, pdf_data):
 
 def product_sheet_names(wb):
     return [name for name in wb.sheetnames if name != "Produtos"]
+
+
+def sheet_product_identity(sheet):
+    code = sheet["D32"].value or sheet["D31"].value or ""
+    ean = sheet["F32"].value or sheet["F31"].value or ""
+    description = sheet["B15"].value or sheet["A32"].value or sheet["A31"].value or ""
+    return {
+        "code": normalize_code(code),
+        "ean": re.sub(r"\D", "", str(ean or "")),
+        "description": str(description or "").strip(),
+    }
+
+
+def xml_text(element, name):
+    child = element.find(f"{{*}}{name}")
+    return str(child.text or "").strip() if child is not None else ""
+
+
+def read_nfe_xml_items(xml_files):
+    items = []
+    for xml_file in xml_files or []:
+        file_name = xml_file.get("name", "nota.xml")
+        try:
+            root = ET.fromstring(xml_file.get("data", b""))
+        except (ET.ParseError, TypeError) as exc:
+            raise ValueError(f"XML inválido: {file_name}") from exc
+
+        for detail in root.findall(".//{*}det"):
+            product = detail.find("{*}prod")
+            if product is None:
+                continue
+            cest = re.sub(r"\D", "", xml_text(product, "CEST"))
+            if not cest:
+                continue
+            ean = xml_text(product, "cEAN")
+            if normalize_key(ean) in {"semgtin", ""}:
+                ean = xml_text(product, "cEANTrib")
+            if normalize_key(ean) == "semgtin":
+                ean = ""
+            items.append({
+                "xmlName": file_name,
+                "itemNumber": str(detail.attrib.get("nItem", "")),
+                "supplierCode": xml_text(product, "cProd"),
+                "ean": re.sub(r"\D", "", ean),
+                "description": xml_text(product, "xProd"),
+                "ncm": re.sub(r"\D", "", xml_text(product, "NCM")),
+                "cest": cest,
+            })
+    if not items:
+        raise ValueError("Nenhum CEST foi encontrado nos XMLs enviados.")
+    return items
+
+
+def xml_description_score(sheet_description, xml_description):
+    sheet_text = normalize_brand_text(sheet_description)
+    xml_text_value = normalize_brand_text(xml_description)
+    if not sheet_text or not xml_text_value:
+        return 0
+    sheet_tokens = set(sheet_text.split()) - MATCH_STOP_TOKENS
+    xml_tokens = set(xml_text_value.split()) - MATCH_STOP_TOKENS
+    overlap = len(sheet_tokens & xml_tokens) / max(1, min(len(sheet_tokens), len(xml_tokens)))
+    sequence = difflib.SequenceMatcher(None, sheet_text, xml_text_value).ratio()
+    return round(max(overlap, sequence) * 100)
+
+
+def match_xml_item(identity, xml_items, used_indexes):
+    if identity["ean"]:
+        for index, item in enumerate(xml_items):
+            if index not in used_indexes and item["ean"] == identity["ean"]:
+                return index, "EAN", 100
+
+    if identity["code"]:
+        for index, item in enumerate(xml_items):
+            if index in used_indexes or normalize_code(item["supplierCode"]) != identity["code"]:
+                continue
+            description_score = xml_description_score(identity["description"], item["description"])
+            if description_score >= 45:
+                return index, "Código + descrição", max(95, description_score)
+
+    best_index = None
+    best_score = 0
+    for index, item in enumerate(xml_items):
+        if index in used_indexes:
+            continue
+        score = xml_description_score(identity["description"], item["description"])
+        if score > best_score:
+            best_index = index
+            best_score = score
+    if best_index is not None and best_score >= 45:
+        return best_index, "Descrição", best_score
+    return None, "", best_score
+
+
+def nfe_xml_cest_preview(workbook_bytes, xml_files):
+    if not workbook_bytes:
+        raise ValueError("Envie o Excel gerado para conferir os XMLs.")
+    try:
+        wb = load_workbook(io.BytesIO(workbook_bytes), read_only=True, data_only=True)
+    except Exception as exc:
+        raise ValueError("Não consegui ler o Excel enviado.") from exc
+
+    xml_items = read_nfe_xml_items(xml_files)
+    used_indexes = set()
+    items = []
+    for index, sheet_name in enumerate(product_sheet_names(wb)):
+        identity = sheet_product_identity(wb[sheet_name])
+        xml_index, method, score = match_xml_item(identity, xml_items, used_indexes)
+        xml_item = xml_items[xml_index] if xml_index is not None else {}
+        if xml_index is not None:
+            used_indexes.add(xml_index)
+        items.append({
+            "index": index + 1,
+            "sheetName": sheet_name,
+            "productCode": identity["code"],
+            "productDescription": identity["description"],
+            "productEan": identity["ean"],
+            "selected": xml_index is not None,
+            "matchMethod": method,
+            "score": score,
+            "xmlName": xml_item.get("xmlName", ""),
+            "xmlItem": xml_item.get("itemNumber", ""),
+            "xmlProductCode": xml_item.get("supplierCode", ""),
+            "xmlDescription": xml_item.get("description", ""),
+            "ean": xml_item.get("ean", ""),
+            "ncm": xml_item.get("ncm", ""),
+            "cest": xml_item.get("cest", ""),
+        })
+    wb.close()
+    matched_count = sum(1 for item in items if item["selected"])
+    return {
+        "sheetCount": len(items),
+        "xmlCount": len(xml_files or []),
+        "xmlItemCount": len(xml_items),
+        "matchedCount": matched_count,
+        "missingCestCount": len(items) - matched_count,
+        "extraXmlItemCount": max(0, len(xml_items) - matched_count),
+        "items": items,
+    }
+
+
+def fill_workbook_with_nfe_cest(workbook_bytes, xml_files, selected_indexes=None):
+    preview = nfe_xml_cest_preview(workbook_bytes, xml_files)
+    try:
+        wb = load_workbook(io.BytesIO(workbook_bytes))
+    except Exception as exc:
+        raise ValueError("Não consegui ler o Excel enviado.") from exc
+
+    use_explicit_selection = selected_indexes is not None
+    selected_indexes = set(selected_indexes or [])
+    filled = 0
+    for item in preview["items"]:
+        if not item["selected"] or not item["cest"]:
+            continue
+        item_index = item["index"] - 1
+        if use_explicit_selection and item_index not in selected_indexes:
+            continue
+        wb[item["sheetName"]]["B19"] = item["cest"]
+        filled += 1
+    if not filled:
+        raise ValueError("Nenhuma ficha foi selecionada para receber o CEST.")
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
 
 
 def pdf_data_from_file(pdf_file):
