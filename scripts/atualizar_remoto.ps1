@@ -67,18 +67,49 @@ $script = {
     }
 
     function Stop-RemoteProjectProcesses() {
-        $processNames = @("python.exe", "pythonw.exe", "node.exe", "cmd.exe", "wscript.exe", "cscript.exe")
-        $processes = Get-CimInstance Win32_Process | Where-Object {
-            $_.ProcessId -ne $PID -and
-            $processNames -contains $_.Name.ToLowerInvariant() -and
-            ![string]::IsNullOrWhiteSpace($_.CommandLine) -and
-            $_.CommandLine -like "*$RemoteProjectDir*"
+        function Stop-RemoteProcessTree($ProcessId, $ProcessTable) {
+            $children = @($ProcessTable | Where-Object { $_.ParentProcessId -eq $ProcessId })
+            foreach ($child in $children) {
+                Stop-RemoteProcessTree -ProcessId $child.ProcessId -ProcessTable $ProcessTable
+            }
+
+            $process = $ProcessTable | Where-Object { $_.ProcessId -eq $ProcessId } | Select-Object -First 1
+            if ($process) {
+                Write-Host "Encerrando processo do sistema: $($process.Name) PID $ProcessId" -ForegroundColor Yellow
+                Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+            }
         }
 
-        foreach ($process in $processes) {
-            Write-Host "Encerrando processo do sistema: $($process.Name) PID $($process.ProcessId)" -ForegroundColor Yellow
-            Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+        $resolvedProjectDir = (Resolve-Path -LiteralPath $RemoteProjectDir).Path
+        $processTable = @(Get-CimInstance Win32_Process)
+        $targetIds = [System.Collections.Generic.HashSet[int]]::new()
+
+        foreach ($process in $processTable) {
+            if ($process.ProcessId -eq $PID) {
+                continue
+            }
+            $commandLine = [string]$process.CommandLine
+            $executablePath = [string]$process.ExecutablePath
+            if (
+                $commandLine -like "*$resolvedProjectDir*" -or
+                $executablePath -like "$resolvedProjectDir*"
+            ) {
+                [void]$targetIds.Add([int]$process.ProcessId)
+            }
         }
+
+        foreach ($port in @(8000, 5173, 4173)) {
+            Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue |
+                ForEach-Object { [void]$targetIds.Add([int]$_.OwningProcess) }
+        }
+
+        foreach ($processId in @($targetIds)) {
+            if (Get-Process -Id $processId -ErrorAction SilentlyContinue) {
+                Stop-RemoteProcessTree -ProcessId $processId -ProcessTable $processTable
+            }
+        }
+
+        Start-Sleep -Seconds 2
     }
 
     function Restore-LatestStashForRetry() {
@@ -98,6 +129,75 @@ $script = {
         }
         if ($LASTEXITCODE -ne 0) {
             throw "Nao foi possivel restaurar o stash $latest. Resolva o conflito diretamente na producao."
+        }
+    }
+
+    function Get-ProtectedLocalFiles() {
+        return @(
+            "start-backend.cmd",
+            "start-frontend.cmd",
+            "start-sistema-produtos.cmd",
+            "start-sistema-produtos-hidden.vbs",
+            "admin.local.json",
+            ".session_secret"
+        )
+    }
+
+    function Recover-MissingProtectedFilesFromStash() {
+        $stashRefs = @(& git stash list --format="%gd" 2>$null)
+        foreach ($relativePath in Get-ProtectedLocalFiles) {
+            $target = Join-Path $RemoteProjectDir $relativePath
+            if (Test-Path -LiteralPath $target) {
+                continue
+            }
+
+            foreach ($stashRef in $stashRefs) {
+                $untrackedCommit = "$stashRef^3"
+                & git cat-file -e "${untrackedCommit}:$relativePath" 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    continue
+                }
+
+                Write-Host "Recuperando arquivo local do stash $stashRef`: $relativePath" -ForegroundColor Yellow
+                & git checkout $untrackedCommit -- $relativePath 2>&1 | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Nao foi possivel recuperar '$relativePath' do stash $stashRef."
+                }
+                & git reset -- $relativePath 2>&1 | Out-Null
+                break
+            }
+        }
+    }
+
+    function Backup-ProtectedLocalFiles() {
+        $backupDir = Join-Path $env:TEMP "sistema-produtos-local-$(Get-Date -Format 'yyyyMMdd-HHmmssfff')"
+        New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+
+        foreach ($relativePath in Get-ProtectedLocalFiles) {
+            $source = Join-Path $RemoteProjectDir $relativePath
+            if (Test-Path -LiteralPath $source) {
+                Copy-Item -LiteralPath $source -Destination (Join-Path $backupDir $relativePath) -Force
+            }
+        }
+        return $backupDir
+    }
+
+    function Restore-ProtectedLocalFiles($BackupDir) {
+        if ([string]::IsNullOrWhiteSpace($BackupDir) -or !(Test-Path -LiteralPath $BackupDir)) {
+            return
+        }
+
+        foreach ($relativePath in Get-ProtectedLocalFiles) {
+            $source = Join-Path $BackupDir $relativePath
+            if (Test-Path -LiteralPath $source) {
+                Copy-Item -LiteralPath $source -Destination (Join-Path $RemoteProjectDir $relativePath) -Force
+            }
+        }
+    }
+
+    function Remove-ProtectedFilesBackup($BackupDir) {
+        if (![string]::IsNullOrWhiteSpace($BackupDir) -and (Test-Path -LiteralPath $BackupDir)) {
+            Remove-Item -LiteralPath $BackupDir -Recurse -Force
         }
     }
 
@@ -189,9 +289,11 @@ $script = {
 
     Set-Location -LiteralPath $RemoteProjectDir
     Restore-LatestStashForRetry
+    Recover-MissingProtectedFilesFromStash
 
     $stoppedTasks = @()
     $createdStash = $null
+    $protectedFilesBackup = Backup-ProtectedLocalFiles
     try {
         foreach ($taskName in @($RemoteProjectTask, $RemoteBackendTask, $RemoteFrontendTask) | Select-Object -Unique) {
             if (Stop-RemoteScheduledTask -Name $taskName) {
@@ -207,13 +309,18 @@ $script = {
         Write-Host ""
         Write-Host "==> Sincronizando script de producao pelo Git" -ForegroundColor Cyan
         Invoke-RemoteGitPull
+        Restore-ProtectedLocalFiles -BackupDir $protectedFilesBackup
     }
     catch {
         Restore-LocalChanges -StashRef $createdStash
+        Restore-ProtectedLocalFiles -BackupDir $protectedFilesBackup
         foreach ($taskName in $stoppedTasks) {
             Start-RemoteScheduledTask -Name $taskName
         }
         throw
+    }
+    finally {
+        Remove-ProtectedFilesBackup -BackupDir $protectedFilesBackup
     }
 
     & .\scripts\atualizar_producao.ps1 `

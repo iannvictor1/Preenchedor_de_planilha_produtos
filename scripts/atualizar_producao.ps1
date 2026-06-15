@@ -15,6 +15,62 @@ function Write-Step($Message) {
     Write-Host "==> $Message" -ForegroundColor Cyan
 }
 
+function Stop-ProcessTree($ProcessId, $ProcessTable) {
+    $children = @($ProcessTable | Where-Object { $_.ParentProcessId -eq $ProcessId })
+    foreach ($child in $children) {
+        Stop-ProcessTree -ProcessId $child.ProcessId -ProcessTable $ProcessTable
+    }
+
+    $process = $ProcessTable | Where-Object { $_.ProcessId -eq $ProcessId } | Select-Object -First 1
+    if ($process) {
+        Write-Host "Encerrando processo: $($process.Name) PID $ProcessId" -ForegroundColor Yellow
+        Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Stop-ProjectRuntimeProcesses($ProjectDir) {
+    Write-Step "Encerrando instancias anteriores do sistema"
+    $resolvedProjectDir = (Resolve-Path -LiteralPath $ProjectDir).Path
+    $processTable = @(Get-CimInstance Win32_Process)
+    $targetIds = [System.Collections.Generic.HashSet[int]]::new()
+
+    foreach ($process in $processTable) {
+        $commandLine = [string]$process.CommandLine
+        $executablePath = [string]$process.ExecutablePath
+        if (
+            (!$commandLine -and !$executablePath) -or
+            $process.ProcessId -eq $PID
+        ) {
+            continue
+        }
+
+        if (
+            $commandLine -like "*$resolvedProjectDir*" -or
+            $executablePath -like "$resolvedProjectDir*"
+        ) {
+            [void]$targetIds.Add([int]$process.ProcessId)
+        }
+    }
+
+    foreach ($port in @(8000, 5173, 4173)) {
+        try {
+            Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue |
+                ForEach-Object { [void]$targetIds.Add([int]$_.OwningProcess) }
+        }
+        catch {
+            Write-Host "Nao foi possivel consultar a porta ${port}: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    foreach ($processId in @($targetIds)) {
+        if (Get-Process -Id $processId -ErrorAction SilentlyContinue) {
+            Stop-ProcessTree -ProcessId $processId -ProcessTable $processTable
+        }
+    }
+
+    Start-Sleep -Seconds 2
+}
+
 function Restart-OptionalService($Name) {
     if ([string]::IsNullOrWhiteSpace($Name)) {
         return
@@ -237,6 +293,8 @@ Invoke-NpmCommand @("install") "npm install falhou."
 Invoke-NpmCommand @("run", "build") "npm run build falhou."
 
 Set-Location -LiteralPath $ProjectDir
+
+Stop-ProjectRuntimeProcesses -ProjectDir $ProjectDir
 
 Restart-OptionalService -Name $BackendService
 Restart-OptionalService -Name $FrontendService
