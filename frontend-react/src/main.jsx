@@ -398,6 +398,7 @@ function App() {
   }
 
   function editUser(user) {
+    if (user.fixed) return;
     setEditingUserId(user.id);
     setUserForm({
       username: user.username,
@@ -1551,14 +1552,14 @@ function App() {
                         </span>
                       </td>
                       <td className="user-actions">
-                        <button className="ghost" onClick={() => editUser(user)}>
+                        <button className="ghost" onClick={() => editUser(user)} disabled={user.fixed}>
                           <Pencil size={16} />
                           Editar
                         </button>
                         <button
                           className="ghost danger"
                           onClick={() => removeUser(user)}
-                          disabled={user.id === session.user.id}
+                          disabled={user.fixed || user.id === session.user.id}
                         >
                           <Trash2 size={16} />
                           Excluir

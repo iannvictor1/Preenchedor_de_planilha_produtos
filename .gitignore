@@ -13,6 +13,12 @@ venv/
 users.db
 users.db-shm
 users.db-wal
+admin.local.json
+.session_secret
+start-backend.cmd
+start-frontend.cmd
+start-sistema-produtos.cmd
+start-sistema-produtos-hidden.vbs
 
 # Dados locais grandes ou especificos da instalacao
 Fotos Cod/

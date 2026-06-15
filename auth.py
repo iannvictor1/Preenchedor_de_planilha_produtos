@@ -13,8 +13,27 @@ from fastapi import Depends, Header, HTTPException
 
 BASE_DIR = Path(__file__).resolve().parent
 USERS_DB = Path(os.getenv("USERS_DB_PATH", BASE_DIR / "users.db"))
+ADMIN_CONFIG = BASE_DIR / "admin.local.json"
+SESSION_SECRET_FILE = BASE_DIR / ".session_secret"
 USER_ROLES = {"vendedor", "supervisor", "administrador"}
 PASSWORD_ITERATIONS = 600_000
+
+
+def fixed_admin_credentials():
+    if not ADMIN_CONFIG.exists():
+        raise ValueError(
+            "Arquivo admin.local.json não encontrado. Configure o administrador local."
+        )
+    try:
+        data = json.loads(ADMIN_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Não foi possível ler admin.local.json.") from exc
+
+    username = normalize_username(data.get("username", "admin"))
+    password = str(data.get("password", ""))
+    if not username or len(password) < 6:
+        raise ValueError("Administrador local inválido em admin.local.json.")
+    return username, password
 
 
 def database_connection():
@@ -75,12 +94,34 @@ def initialize_users_db():
             """
         )
 
+        admin_username, admin_password = fixed_admin_credentials()
+        admin = connection.execute(
+            "SELECT * FROM users WHERE username = ?",
+            (admin_username,),
+        ).fetchone()
+        if admin:
+            admin_changed = (
+                not verify_password(admin_password, admin["password_hash"])
+                or admin["role"] != "administrador"
+                or not admin["active"]
+            )
+            if admin_changed:
+                connection.execute(
+                    """
+                    UPDATE users
+                    SET password_hash = ?, role = 'administrador', active = 1,
+                        token_version = token_version + 1, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (hash_password(admin_password), admin["id"]),
+                )
+        else:
+            connection.execute(
+                "INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'administrador')",
+                (admin_username, hash_password(admin_password)),
+            )
+
         bootstrap_users = [
-            (
-                normalize_username(os.getenv("ADMIN_USERNAME", "admin")),
-                os.getenv("ADMIN_PASSWORD", ""),
-                "administrador",
-            ),
             ("vendedor", os.getenv("SELLER_PASSWORD", ""), "vendedor"),
             ("supervisor", os.getenv("SUPERVISOR_PASSWORD", ""), "supervisor"),
         ]
@@ -99,6 +140,7 @@ def initialize_users_db():
 
 
 def public_user(row):
+    fixed_admin_username, _ = fixed_admin_credentials()
     return {
         "id": row["id"],
         "username": row["username"],
@@ -106,6 +148,7 @@ def public_user(row):
         "active": bool(row["active"]),
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
+        "fixed": row["username"].lower() == fixed_admin_username,
     }
 
 
@@ -143,9 +186,13 @@ def token_user(user_id):
 
 
 def session_secret():
-    secret = os.getenv("SESSION_SECRET", "")
-    if not secret:
-        raise ValueError("SESSION_SECRET não configurada.")
+    if SESSION_SECRET_FILE.exists():
+        secret = SESSION_SECRET_FILE.read_text(encoding="ascii").strip()
+        if secret:
+            return secret
+
+    secret = secrets.token_urlsafe(48)
+    SESSION_SECRET_FILE.write_text(secret, encoding="ascii")
     return secret
 
 
@@ -246,6 +293,9 @@ def update_user(user_id, username=None, role=None, active=None, password=None):
         ).fetchone()
         if not current:
             raise ValueError("Usuário não encontrado.")
+        fixed_admin_username, _ = fixed_admin_credentials()
+        if current["username"].lower() == fixed_admin_username:
+            raise ValueError("O administrador fixo não pode ser alterado.")
 
         next_username = normalize_username(username) if username is not None else current["username"]
         next_role = role if role is not None else current["role"]
@@ -292,6 +342,9 @@ def delete_user(user_id, current_user_id):
         row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if not row:
             raise ValueError("Usuário não encontrado.")
+        fixed_admin_username, _ = fixed_admin_credentials()
+        if row["username"].lower() == fixed_admin_username:
+            raise ValueError("O administrador fixo não pode ser excluído.")
         if row["role"] == "administrador" and row["active"]:
             admin_count = connection.execute(
                 "SELECT COUNT(*) FROM users WHERE role = 'administrador' AND active = 1"

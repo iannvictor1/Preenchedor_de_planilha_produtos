@@ -58,16 +58,16 @@ http://127.0.0.1:5173
 
 ## Login, perfis e usuarios
 
-Antes de iniciar o backend, configure as senhas e a chave usada para assinar as sessoes:
+O administrador fixo e configurado no arquivo local `admin.local.json`:
 
-```powershell
-$env:SELLER_PASSWORD="senha-do-vendedor"
-$env:SUPERVISOR_PASSWORD="senha-do-supervisor"
-$env:ADMIN_PASSWORD="senha-do-administrador"
-$env:SESSION_SECRET="uma-chave-longa-e-aleatoria"
+```json
+{
+  "username": "admin",
+  "password": "sua-senha"
+}
 ```
 
-No primeiro inicio, essas variaveis criam as contas `vendedor`, `supervisor` e `admin`. Depois disso, o administrador pode criar, editar, desativar e excluir contas pela tela `Usuarios`. As senhas sao armazenadas com hash no arquivo local `users.db`, que nao deve ser versionado.
+Esse arquivo e a chave interna `.session_secret` ficam fora do Git. A conta fixa nao pode ser editada ou excluida pela tela. Os demais usuarios sao gerenciados pelo administrador na tela `Usuarios`. As senhas sao armazenadas com hash no arquivo local `users.db`.
 
 O vendedor pode manter ou aumentar o preco original; o supervisor e o administrador podem aumentar ou reduzir. A validacao e feita pela API antes da geracao do Excel.
 

@@ -9,7 +9,8 @@ param(
     [string]$FrontendTask = "",
     [string]$ProjectTask = "Sistema Produtos",
     [string]$UserName = "",
-    [switch]$StashLocalChanges
+    [switch]$StashLocalChanges,
+    [switch]$RestoreLatestStash
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,7 +27,7 @@ if (!$connection.TcpTestSucceeded) {
 }
 
 $script = {
-    param($RemoteProjectDir, $RemoteBackendService, $RemoteFrontendService, $RemoteBackendTask, $RemoteFrontendTask, $RemoteProjectTask, $RemoteStashLocalChanges)
+    param($RemoteProjectDir, $RemoteBackendService, $RemoteFrontendService, $RemoteBackendTask, $RemoteFrontendTask, $RemoteProjectTask, $RemoteStashLocalChanges, $RemoteRestoreLatestStash)
 
     function Stop-RemoteScheduledTask($Name) {
         if ([string]::IsNullOrWhiteSpace($Name)) {
@@ -65,6 +66,41 @@ $script = {
         }
     }
 
+    function Stop-RemoteProjectProcesses() {
+        $processNames = @("python.exe", "pythonw.exe", "node.exe", "cmd.exe", "wscript.exe", "cscript.exe")
+        $processes = Get-CimInstance Win32_Process | Where-Object {
+            $_.ProcessId -ne $PID -and
+            $processNames -contains $_.Name.ToLowerInvariant() -and
+            ![string]::IsNullOrWhiteSpace($_.CommandLine) -and
+            $_.CommandLine -like "*$RemoteProjectDir*"
+        }
+
+        foreach ($process in $processes) {
+            Write-Host "Encerrando processo do sistema: $($process.Name) PID $($process.ProcessId)" -ForegroundColor Yellow
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+        }
+    }
+
+    function Restore-LatestStashForRetry() {
+        if (!$RemoteRestoreLatestStash) {
+            return
+        }
+
+        $latest = & git stash list --format="%gd" -n 1 2>&1
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($latest)) {
+            throw "Nenhum stash remoto foi encontrado para restaurar."
+        }
+
+        Write-Host "Restaurando stash da tentativa anterior: $latest" -ForegroundColor Yellow
+        $output = & git stash pop $latest 2>&1
+        if ($output) {
+            $output | ForEach-Object { Write-Host $_ }
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "Nao foi possivel restaurar o stash $latest. Resolva o conflito diretamente na producao."
+        }
+    }
+
     function Backup-LocalChanges() {
         $status = & git status --porcelain --untracked-files=normal 2>&1
         if ($LASTEXITCODE -ne 0) {
@@ -72,7 +108,7 @@ $script = {
         }
 
         if (!$status) {
-            return
+            return $null
         }
 
         if (!$RemoteStashLocalChanges) {
@@ -90,6 +126,43 @@ $script = {
         }
         if ($stashExitCode -ne 0) {
             throw "Nao foi possivel criar o backup das alteracoes locais."
+        }
+
+        return "stash@{0}"
+    }
+
+    function Restore-LocalChanges($StashRef) {
+        if ([string]::IsNullOrWhiteSpace($StashRef)) {
+            return
+        }
+
+        Write-Host "Restaurando alteracoes locais apos falha: $StashRef" -ForegroundColor Yellow
+        $output = & git stash pop $StashRef 2>&1
+        if ($output) {
+            $output | ForEach-Object { Write-Host $_ }
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Nao foi possivel restaurar automaticamente o stash. Ele continua preservado em $StashRef." -ForegroundColor Red
+        }
+    }
+
+    function Assert-FileNotLocked($RelativePath) {
+        $path = Join-Path $RemoteProjectDir $RelativePath
+        if (!(Test-Path -LiteralPath $path)) {
+            return
+        }
+
+        try {
+            $stream = [System.IO.File]::Open(
+                $path,
+                [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::ReadWrite,
+                [System.IO.FileShare]::None
+            )
+            $stream.Dispose()
+        }
+        catch {
+            throw "O arquivo '$RelativePath' esta aberto ou bloqueado na producao. Feche o Excel e qualquer processo que esteja usando a planilha antes de atualizar."
         }
     }
 
@@ -115,8 +188,10 @@ $script = {
     }
 
     Set-Location -LiteralPath $RemoteProjectDir
+    Restore-LatestStashForRetry
 
     $stoppedTasks = @()
+    $createdStash = $null
     try {
         foreach ($taskName in @($RemoteProjectTask, $RemoteBackendTask, $RemoteFrontendTask) | Select-Object -Unique) {
             if (Stop-RemoteScheduledTask -Name $taskName) {
@@ -124,14 +199,17 @@ $script = {
             }
         }
 
+        Stop-RemoteProjectProcesses
         Start-Sleep -Seconds 2
-        Backup-LocalChanges
+        Assert-FileNotLocked -RelativePath "Cópia de FICHA CADASTRO PRODUTO C&M.xlsx"
+        $createdStash = Backup-LocalChanges
 
         Write-Host ""
         Write-Host "==> Sincronizando script de producao pelo Git" -ForegroundColor Cyan
         Invoke-RemoteGitPull
     }
     catch {
+        Restore-LocalChanges -StashRef $createdStash
         foreach ($taskName in $stoppedTasks) {
             Start-RemoteScheduledTask -Name $taskName
         }
@@ -150,7 +228,7 @@ $script = {
 $params = @{
     ComputerName = $ComputerName
     ScriptBlock = $script
-    ArgumentList = @($ProjectDir, $BackendService, $FrontendService, $BackendTask, $FrontendTask, $ProjectTask, [bool]$StashLocalChanges)
+    ArgumentList = @($ProjectDir, $BackendService, $FrontendService, $BackendTask, $FrontendTask, $ProjectTask, [bool]$StashLocalChanges, [bool]$RestoreLatestStash)
 }
 
 if ($credential) {
