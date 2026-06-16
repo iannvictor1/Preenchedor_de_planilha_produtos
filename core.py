@@ -368,6 +368,15 @@ def format_measure_value(value):
     return f"{value:.1f}".replace(".", ",")
 
 
+def parse_dimension_number(value):
+    raw = str(value or "").strip().replace(",", ".")
+    if re.fullmatch(r"\d{4,}", raw) and raw.endswith("50"):
+        fixed = raw[:-2]
+        if fixed:
+            return float(fixed)
+    return float(raw)
+
+
 def parse_box_dimensions(value):
     text = str(value or "")
     labeled = {}
@@ -409,6 +418,30 @@ def parse_box_dimensions(value):
             unit = units[-1] if units else ("cm" if max(values) <= 100 else "mm")
             matches = [(str(v).replace(".", ","), unit) for v in values]
     if len(matches) < 3:
+        pair_matches = re.findall(
+            r"\b(\d+(?:[,.]\d+)?)\s*(mm|cm)?\s*[xX]\s*"
+            r"(\d+(?:[,.]\d+)?)\s*(mm|cm)?\b",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if pair_matches:
+            candidates = []
+            for first, first_unit, second, second_unit in pair_matches:
+                values = [parse_dimension_number(first), parse_dimension_number(second)]
+                unit = (second_unit or first_unit or ("cm" if max(values) <= 100 else "mm")).lower()
+                comparable = [value / 10 if unit == "mm" else value for value in values]
+                if min(comparable) < 5 or max(comparable) > 200:
+                    continue
+                converted = [format_measure_value(value) for value in comparable]
+                candidates.append((comparable[0] * comparable[1], converted))
+
+            if candidates:
+                _, converted = sorted(candidates, key=lambda item: item[0], reverse=True)[0]
+                return {
+                    "largura": converted[0],
+                    "comprimento": converted[1],
+                }
+
         return {}
 
     converted = []
@@ -469,7 +502,10 @@ def find_box_dimensions_text(text):
     labeled_patterns = [
         r"DIMENSIONAL\s+DA.*CAIXA",
         r"DIMENS\w*\s+DA.*CAIXA",
+        r"DIMENS\w*\s+DA.*EMBALAG",
+        r"DIMENSIONES\s+DEL.*EMBALAJE",
         r"MEDIDAS?\s+DA.*CAIXA",
+        r"MEDIDAS?\s+DA.*EMBALAG",
     ]
     for index, line in enumerate(lines):
         label_window = " ".join(lines[index:index + 3])
@@ -480,13 +516,13 @@ def find_box_dimensions_text(text):
         window = " ".join(lines[index:index + 6])
         matches = re.findall(
             r"\b\d+(?:[,.]\d+)?\s*(?:mm|cm)?\s*[xX]\s*"
-            r"\d+(?:[,.]\d+)?\s*(?:mm|cm)?\s*[xX]\s*"
-            r"\d+(?:[,.]\d+)?\s*(?:mm|cm)?\b",
+            r"\d+(?:[,.]\d+)?\s*(?:mm|cm)?"
+            r"(?:\s*[xX]\s*\d+(?:[,.]\d+)?\s*(?:mm|cm)?)?\b",
             window,
             flags=re.IGNORECASE,
         )
         if matches:
-            return re.sub(r"\s+", " ", matches[-1]).strip()
+            return re.sub(r"\s+", " ", " ".join(matches)).strip()
 
     loose = re.search(
         r"\b\d+(?:[,.]\d+)?\s*mm\s*[xX]\s*"
@@ -1410,7 +1446,7 @@ def analyze_supplier_pdf_folder(pdf_folder_path, rows, min_score=55):
     }
 
 
-def supplier_pdf_data_by_product(pdf_folder_path, rows, min_score=55):
+def supplier_pdf_data_by_product(pdf_folder_path, rows, min_score=100):
     if not str(pdf_folder_path or "").strip():
         return {}
 
@@ -1421,31 +1457,61 @@ def supplier_pdf_data_by_product(pdf_folder_path, rows, min_score=55):
         raise ValueError(f"O caminho das fichas nao e uma pasta: {folder}")
 
     best_by_code = {}
-    products = prepare_supplier_match_products(rows)
+    products = []
+    for row in rows:
+        summary = row_summary(row)
+        product_label = product_sheet_match_label(
+            summary["description"],
+            summary["supplier"],
+            summary["brand"],
+            summary["category"],
+        )
+        if product_label and summary["code"]:
+            products.append({
+                "code": summary["code"],
+                "label": product_label,
+                "brand": detect_known_brand(
+                    summary["description"], summary["supplier"], summary["brand"]
+                ),
+                "factoryCode": summary["factoryCode"],
+            })
+
+    pdf_labels = []
     for pdf in sorted(folder.rglob("*.pdf")):
-        try:
-            data = extract_supplier_pdf_data(pdf.read_bytes())
-        except ValueError:
-            continue
+        label = supplier_pdf_text_label(pdf)
+        pdf_labels.append({
+            "path": pdf,
+            "file": str(pdf.relative_to(folder)),
+            "label": label,
+            "brand": supplier_pdf_brand(pdf, label),
+            "internalCode": supplier_pdf_internal_code(pdf),
+        })
 
-        pdf_label = supplier_pdf_label(pdf)
-        pdf_tokens = match_tokens(pdf_label)
-        candidates = supplier_match_candidates(products, pdf_tokens)
-
-        for product in candidates:
-            code = product["code"]
-            if not code:
-                continue
-            score = score_supplier_pdf_match_label(pdf_label, product["label"])
+    for product in products:
+        for pdf in pdf_labels:
+            score = score_ordered_pdf_suggestion(
+                product["label"],
+                pdf["label"],
+                product["brand"],
+                pdf["brand"],
+                product["factoryCode"],
+                product["code"],
+                pdf["internalCode"],
+            )
             if score < min_score:
                 continue
-            current = best_by_code.get(code)
-            if not current or score > current["score"]:
-                best_by_code[code] = {
-                    "score": score,
-                    "file": str(pdf.relative_to(folder)),
-                    "data": data,
-                }
+            current = best_by_code.get(product["code"])
+            if current and current["score"] >= score:
+                continue
+            try:
+                data = extract_supplier_pdf_data(pdf["path"].read_bytes())
+            except ValueError:
+                continue
+            best_by_code[product["code"]] = {
+                "score": score,
+                "file": pdf["file"],
+                "data": data,
+            }
 
     return best_by_code
 

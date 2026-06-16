@@ -326,6 +326,7 @@ function App() {
   const [pdfAudit, setPdfAudit] = useState(null);
   const [pdfAuditLoading, setPdfAuditLoading] = useState(false);
   const [pdfAuditSearch, setPdfAuditSearch] = useState("");
+  const [pdfAuditOnlyCompatible, setPdfAuditOnlyCompatible] = useState(false);
   const [pdfAuditMessage, setPdfAuditMessage] = useState("");
   const [editingUserId, setEditingUserId] = useState(null);
   const [userForm, setUserForm] = useState({
@@ -357,13 +358,14 @@ function App() {
     const query = pdfAuditSearch.trim().toLowerCase();
     return (pdfAudit?.items || [])
       .map((item, auditIndex) => ({ ...item, auditIndex }))
+      .filter((item) => !pdfAuditOnlyCompatible || Number(item.score || 0) > 50)
       .filter((item) =>
         !query || [item.productCode, item.productDescription, item.supplier, item.factoryCode, item.suggestedFile]
           .join(" ")
           .toLowerCase()
           .includes(query),
       );
-  }, [pdfAudit, pdfAuditSearch]);
+  }, [pdfAudit, pdfAuditOnlyCompatible, pdfAuditSearch]);
 
   function buildForm(extra = {}) {
     const form = new FormData();
@@ -1065,6 +1067,7 @@ function App() {
           include_product_sheets: String(includeSheets),
           include_prices: String(includePrices),
           custom_prices: JSON.stringify(includePrices ? selectedCustomPrices : {}),
+          supplier_pdf_folder_path: includeSheets ? supplierPdfFolderPath : "",
         }),
       });
       if (!response.ok) {
@@ -1823,6 +1826,13 @@ function App() {
                 <span>Fichas encontradas: {pdfAudit.pdfCount}</span>
                 <span className="ok">Sugestões aceitas: {pdfAudit.items.filter((item) => item.selected).length}</span>
                 <span className="warn">Revisar: {pdfAudit.items.filter((item) => !item.selected).length}</span>
+                <button
+                  type="button"
+                  className={`pdf-audit-filter ${pdfAuditOnlyCompatible ? "active" : ""}`}
+                  onClick={() => setPdfAuditOnlyCompatible((value) => !value)}
+                >
+                  &gt; 50%
+                </button>
                 <label className="search-input">
                   <Search size={17} />
                   <input

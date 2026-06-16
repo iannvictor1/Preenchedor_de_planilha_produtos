@@ -412,6 +412,22 @@ label.file-control {
   font-size: 12px;
 }
 
+.pdf-audit-filter {
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 6px 12px;
+  min-height: 0;
+  font-size: 12px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.pdf-audit-filter.active {
+  border-color: var(--accent);
+  background: rgb(205 255 69 / 0.12);
+  color: var(--accent);
+}
+
 .pdf-audit-summary .search-input {
   margin-left: auto;
 }
