@@ -28,6 +28,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_CSV = BASE_DIR / "data/Listagem dos produtos.xlsx.csv"
 DEFAULT_ZIP = BASE_DIR / "data/Fotos Cod-20260430T175121Z-3-001.zip"
 DEFAULT_PHOTOS = BASE_DIR / "Fotos Cod"
+DEFAULT_FACTORY_CODES = BASE_DIR / "produtos codigo fabrica.xlsx"
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 TEMPLATE_SUFFIX = "FICHA CADASTRO PRODUTO C&M.xlsx"
 PRICE_FILE = BASE_DIR / "preço.xlsx"
@@ -159,12 +160,36 @@ def normalize_key(value):
 KNOWN_PRODUCT_BRANDS = [
     "CARAPRETA",
     "ALFAMA",
+    "FRIELLA",
+    "COOPAVEL",
+    "VALENCIO",
+    "ATIGEL",
+    "AVE NOVA",
+    "GUIDARA",
+    "DUBOI",
+    "DAUS",
+    "EASYCHEF",
+    "MARIZA",
     "MINERVA",
     "FRIBOI",
+    "MOCOCA",
+    "PAMPLONA",
+    "PLENA",
+    "TUDBOM",
     "SADIA",
+    "PERDIGAO",
     "PERDIGÃO",
     "AURORA",
     "RIO MARIA",
+    "RAINHA DA PAZ",
+    "SOMAVE",
+    "STELLADORO",
+    "SAO FRANCISCO",
+    "SÃO FRANCISCO",
+    "SAO VICENTE",
+    "SÃO VICENTE",
+    "TEMPERO DA CASA",
+    "BRF",
 ]
 
 
@@ -261,6 +286,49 @@ def read_xlsx_products(path: Path):
     return headers, rows
 
 
+def read_factory_code_map(path=DEFAULT_FACTORY_CODES):
+    path = Path(path)
+    if not path.exists():
+        return {}
+
+    wb = load_workbook(path, read_only=True, data_only=True)
+    ws = wb["produtos codigo fabrica"] if "produtos codigo fabrica" in wb.sheetnames else wb.active
+    headers = [
+        normalize_key(cell.value)
+        for cell in next(ws.iter_rows(min_row=1, max_row=1))
+    ]
+
+    try:
+        internal_index = headers.index("codigointerno")
+        factory_index = headers.index("codigofabrica")
+    except ValueError:
+        wb.close()
+        return {}
+
+    mapping = {}
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        internal_code = normalize_code(row[internal_index] if internal_index < len(row) else "")
+        factory_code = normalize_factory_code(row[factory_index] if factory_index < len(row) else "")
+        if internal_code and factory_code:
+            mapping[internal_code] = factory_code
+
+    wb.close()
+    return mapping
+
+
+def apply_factory_codes(rows):
+    factory_codes = read_factory_code_map()
+    if not factory_codes:
+        return rows
+
+    for row in rows:
+        code = row_code(row)
+        if code and code in factory_codes:
+            row.setdefault("Codigo fabrica", factory_codes[code])
+
+    return rows
+
+
 def normalize_code(value):
     if value is None:
         return ""
@@ -272,6 +340,18 @@ def normalize_code(value):
     value = re.sub(r"\.0$", "", value)
     digits = re.findall(r"\d+", value)
     return digits[0].lstrip("0") if digits else value
+
+
+def normalize_factory_code(value):
+    if value is None:
+        return ""
+
+    value = str(value).strip().upper()
+    if not value:
+        return ""
+
+    value = re.sub(r"\.0$", "", value)
+    return re.sub(r"[^A-Z0-9]+", "", normalize_brand_text(value))
 
 
 def format_measure_cm(value_mm):
@@ -793,16 +873,22 @@ def ordered_pdf_folder_suggestions(workbook_bytes, pdf_folder_path, min_score=62
         }
         for pdf in pdfs
     ]
+    for pdf in pdf_labels:
+        pdf["brand"] = supplier_pdf_brand(pdf["path"], pdf["label"])
+        pdf["internalCode"] = supplier_pdf_internal_code(pdf["path"])
+    factory_codes = read_factory_code_map()
     sheets = product_sheet_names(wb)
     used_files = set()
     items = []
 
     for index, sheet_name in enumerate(sheets):
         sheet = wb[sheet_name]
+        product_code = str(sheet["D31"].value or "")
         product_description = str(sheet["B15"].value or "")
         product_family = str(sheet["A31"].value or "")
         product_label = product_sheet_match_label(sheet_name, product_description, product_family)
         product_brand = detect_known_brand(product_description, product_family, sheet_name)
+        product_factory_code = factory_codes.get(normalize_code(product_code), "")
 
         best = None
         best_score = 0
@@ -813,7 +899,10 @@ def ordered_pdf_folder_suggestions(workbook_bytes, pdf_folder_path, min_score=62
                 product_label,
                 pdf["label"],
                 product_brand,
-                detect_known_brand(pdf["file"]),
+                pdf["brand"],
+                product_factory_code,
+                product_code,
+                pdf["internalCode"],
             )
             if score > best_score:
                 best_score = score
@@ -830,7 +919,7 @@ def ordered_pdf_folder_suggestions(workbook_bytes, pdf_folder_path, min_score=62
         items.append({
             "index": index + 1,
             "sheetName": sheet_name,
-            "productCode": str(sheet["D31"].value or ""),
+            "productCode": product_code,
             "productDescription": product_description,
             "selected": selected,
             "score": best_score,
@@ -878,14 +967,15 @@ def audit_product_pdf_suggestions(pdf_folder_path, folder_path="", min_score=62)
 
     folder = folder.resolve()
     pdfs = sorted(folder.rglob("*.pdf"))
-    pdf_labels = [
-        {
+    pdf_labels = []
+    for pdf in pdfs:
+        label = supplier_pdf_text_label(pdf)
+        pdf_labels.append({
             "file": str(pdf.relative_to(folder)),
-            "label": supplier_pdf_text_label(pdf),
-            "brand": detect_known_brand(pdf.name),
-        }
-        for pdf in pdfs
-    ]
+            "label": label,
+            "brand": supplier_pdf_brand(pdf, label),
+            "internalCode": supplier_pdf_internal_code(pdf),
+        })
     used_files = set()
     items = []
 
@@ -909,6 +999,9 @@ def audit_product_pdf_suggestions(pdf_folder_path, folder_path="", min_score=62)
                 pdf["label"],
                 product_brand,
                 pdf["brand"],
+                product["factoryCode"],
+                product["code"],
+                pdf["internalCode"],
             )
             if score > best_score:
                 best = pdf
@@ -923,6 +1016,7 @@ def audit_product_pdf_suggestions(pdf_folder_path, folder_path="", min_score=62)
             "productDescription": product["description"],
             "supplier": product["supplier"],
             "brand": product["brand"],
+            "factoryCode": product["factoryCode"],
             "photoUrl": product["photoUrl"],
             "photoDataUrl": product["photoDataUrl"],
             "suggestedFile": suggested_file,
@@ -1053,7 +1147,8 @@ def normalize_match_text(value):
     tokens = [
         token
         for token in value.split()
-        if len(token) > 1 and not re.fullmatch(r"\d+", token)
+        if len(token) > 1
+        and (not re.fullmatch(r"\d+", token) or len(token) >= 5)
     ]
     return " ".join(tokens)
 
@@ -1064,7 +1159,7 @@ def supplier_pdf_label(path):
     return normalize_match_text(" ".join(parts))
 
 
-def supplier_pdf_text_label(path, max_chars=1000):
+def supplier_pdf_text_label(path, max_chars=5000):
     path = Path(path)
     try:
         reader = PdfReader(str(path))
@@ -1074,11 +1169,31 @@ def supplier_pdf_text_label(path, max_chars=1000):
     return normalize_match_text(" ".join([supplier_pdf_label(path), text[:max_chars]]))
 
 
+def supplier_pdf_brand(path, label=""):
+    path = Path(path)
+    return detect_known_brand(str(path), label)
+
+
+def supplier_pdf_internal_code(path):
+    stem = Path(path).stem.strip()
+    match = re.match(r"^(\d+)(?:\b|\s*[-_])", stem)
+    return normalize_code(match.group(1)) if match else ""
+
+
 def match_tokens(value):
     return {
         token for token in str(value or "").split()
         if len(token) > 2 and token not in MATCH_STOP_TOKENS
     }
+
+
+def factory_code_is_strong(value):
+    code = normalize_factory_code(value)
+    if not code:
+        return False
+    if any(char.isalpha() for char in code):
+        return len(code) >= 4
+    return len(code) >= 5
 
 
 def product_sheet_match_label(*values):
@@ -1095,11 +1210,33 @@ def product_sheet_match_label(*values):
     return " ".join(out)
 
 
-def score_ordered_pdf_suggestion(product_label, pdf_label, product_brand="", pdf_brand=""):
+def score_ordered_pdf_suggestion(
+    product_label,
+    pdf_label,
+    product_brand="",
+    pdf_brand="",
+    product_factory_code="",
+    product_internal_code="",
+    pdf_internal_code="",
+):
+    if normalize_code(product_internal_code) and (
+        normalize_code(product_internal_code) == normalize_code(pdf_internal_code)
+    ):
+        return 100
+
     product_tokens = match_tokens(product_label)
     pdf_tokens = match_tokens(pdf_label)
     if not product_tokens or not pdf_tokens:
         return 0
+
+    product_brand_key = normalize_key(product_brand)
+    pdf_brand_key = normalize_key(pdf_brand)
+    if product_brand_key and pdf_brand_key and product_brand_key != pdf_brand_key:
+        return 0
+
+    factory_code = normalize_factory_code(product_factory_code)
+    if factory_code and factory_code in pdf_tokens and factory_code_is_strong(factory_code):
+        return 100 if product_brand_key and pdf_brand_key == product_brand_key else 96
 
     required_identity = product_tokens & PRODUCT_IDENTITY_TOKENS
     if required_identity:
@@ -1121,10 +1258,8 @@ def score_ordered_pdf_suggestion(product_label, pdf_label, product_brand="", pdf
     )
     score = int((coverage * 60 + reverse_coverage * 15 + sequence * 10 + identity_coverage * 15))
 
-    if product_brand and pdf_brand and product_brand != pdf_brand:
-        score -= 35
-    elif product_brand and pdf_brand == product_brand:
-        score += 8
+    if product_brand_key and pdf_brand_key == product_brand_key:
+        score += 12
 
     variant_tokens = {"ARG", "ARGENTINA", "FIT", "KIDS", "WAGYU", "MEDALHAO", "DIVIDIDO", "QUAD"}
     extra_variants = (pdf_tokens - product_tokens) & variant_tokens
@@ -1591,6 +1726,7 @@ def row_summary(row, image_codes=None, photo_data_url="", photo_version=""):
         ),
         "supplier": val(row, "Nome do fornecedor", "Fornecedor", "Razao Social"),
         "brand": val(row, "Marca"),
+        "factoryCode": normalize_factory_code(val(row, "Codigo fabrica", "CODIGO_FABRICA")),
         "category": val(row, "Nome da categoria"),
         "package": val(row, "Embalagem"),
         "ncm": val(row, "NCM", "NCM + Excecao"),
@@ -1704,6 +1840,8 @@ def load_inputs(csv_bytes=None, zip_bytes=None, folder_path=""):
         _, rows = read_xlsx_products(find_template_file())
     else:
         raise ValueError("Envie o CSV ou coloque uma planilha .xlsx de produtos na pasta do sistema.")
+
+    rows = apply_factory_codes(rows)
 
     zip_file, zip_mapping = index_zip_images(zip_bytes)
     if not zip_bytes and DEFAULT_ZIP.exists():

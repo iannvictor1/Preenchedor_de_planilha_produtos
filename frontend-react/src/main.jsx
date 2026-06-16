@@ -52,13 +52,29 @@ const KNOWN_BRANDS = [
   "CARAPRETA",
   "ALFAMA",
   "MINERVA",
+  "COOPAVEL",
+  "VALENCIO",
   "GUIDARA",
   "ATIGEL",
+  "AVE NOVA",
+  "DUBOI",
+  "DAUS",
+  "EASYCHEF",
   "FRIELLA",
+  "MARIZA",
   "MOCOCA",
   "PAMPLONA",
+  "PLENA",
+  "TUDBOM",
   "SADIA",
   "PERDIGAO",
+  "RIO MARIA",
+  "RAINHA DA PAZ",
+  "SOMAVE",
+  "STELLADORO",
+  "SAO FRANCISCO",
+  "SAO VICENTE",
+  "TEMPERO DA CASA",
 ];
 
 function storedSession() {
@@ -342,7 +358,7 @@ function App() {
     return (pdfAudit?.items || [])
       .map((item, auditIndex) => ({ ...item, auditIndex }))
       .filter((item) =>
-        !query || [item.productCode, item.productDescription, item.supplier, item.suggestedFile]
+        !query || [item.productCode, item.productDescription, item.supplier, item.factoryCode, item.suggestedFile]
           .join(" ")
           .toLowerCase()
           .includes(query),
@@ -1846,7 +1862,7 @@ function App() {
                       </span>
                       <span className="pdf-audit-product">
                         <strong>{item.productCode} - {item.productDescription}</strong>
-                        <small>{[item.supplier, item.brand].filter(Boolean).join(" | ")}</small>
+                        <small>{[item.supplier, item.brand, item.factoryCode ? `Fab. ${item.factoryCode}` : ""].filter(Boolean).join(" | ")}</small>
                       </span>
                       <span className={item.score >= 62 ? "ok" : "warn"}>{item.score || 0}%</span>
                       <span>
