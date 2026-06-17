@@ -620,6 +620,18 @@ def apply_supplier_pdf_data(row, pdf_data):
         row["Unid.Largura(cm)"] = pdf_data["largura"]
     if pdf_data.get("comprimento"):
         row["Unid.Comprim(cm)"] = pdf_data["comprimento"]
+    if pdf_data.get("ncm"):
+        row["NCM"] = pdf_data["ncm"]
+    if pdf_data.get("cest"):
+        row["CEST"] = pdf_data["cest"]
+    if pdf_data.get("validade"):
+        row["Dias Validade"] = pdf_data["validade"]
+    if pdf_data.get("peso_liq"):
+        row["Peso liq."] = pdf_data["peso_liq"]
+    if pdf_data.get("peso_bruto"):
+        row["Peso bruto"] = pdf_data["peso_bruto"]
+    if pdf_data.get("package"):
+        row["Embalagem"] = pdf_data["package"]
     return row
 
 
@@ -1869,7 +1881,7 @@ def supplier_pdf_data_by_product(pdf_folder_path, rows, min_score=100):
     if not folder.is_dir():
         raise ValueError(f"O caminho das fichas nao e uma pasta: {folder}")
 
-    best_by_code = {}
+    best_by_code = supplier_catalog_xlsx_data_by_product(pdf_folder_path, rows)
     products = []
     for row in rows:
         summary = row_summary(row)
@@ -1929,6 +1941,123 @@ def supplier_pdf_data_by_product(pdf_folder_path, rows, min_score=100):
     return best_by_code
 
 
+def supplier_catalog_value(value):
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def supplier_catalog_measure(value):
+    if value is None or str(value).strip() == "":
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value).strip().replace(".", ",")
+    if number.is_integer():
+        return str(int(number))
+    return str(number).replace(".", ",")
+
+
+def supplier_catalog_digits(value):
+    return re.sub(r"\D", "", supplier_catalog_value(value))
+
+
+def supplier_catalog_data_from_row(row):
+    code = normalize_factory_code(row[0] if len(row) > 0 else "")
+    if not code:
+        return "", {}
+
+    units_per_box = supplier_catalog_value(row[4] if len(row) > 4 else "")
+    box_alt = supplier_catalog_measure(row[12] if len(row) > 12 else "")
+    box_larg = supplier_catalog_measure(row[13] if len(row) > 13 else "")
+    box_comp = supplier_catalog_measure(row[14] if len(row) > 14 else "")
+    box_weight = supplier_catalog_measure(row[15] if len(row) > 15 else "")
+    box_dimensions = ""
+    if box_alt and box_larg and box_comp:
+        box_dimensions = (
+            f"Altura: {box_alt} cm "
+            f"Largura: {box_larg} cm "
+            f"Comprimento: {box_comp} cm"
+        )
+
+    data = {
+        "description": supplier_catalog_value(row[1] if len(row) > 1 else ""),
+        "ncm": supplier_catalog_digits(row[2] if len(row) > 2 else ""),
+        "cest": supplier_catalog_digits(row[3] if len(row) > 3 else ""),
+        "ean": supplier_catalog_digits(row[5] if len(row) > 5 else ""),
+        "dun": supplier_catalog_digits(row[6] if len(row) > 6 else ""),
+        "validade": supplier_catalog_value(row[7] if len(row) > 7 else ""),
+        "box_dimensions": box_dimensions,
+        "altura": box_alt,
+        "largura": box_larg,
+        "comprimento": box_comp,
+        "peso_liq": box_weight,
+        "package": f"CX C/ {units_per_box} UN" if units_per_box else "",
+    }
+    return code, {key: value for key, value in data.items() if value}
+
+
+def read_supplier_catalog_xlsx(path):
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except Exception:
+        return {}
+
+    out = {}
+    try:
+        for sheet in workbook.worksheets:
+            header_row_index = None
+            for index, row in enumerate(sheet.iter_rows(min_row=1, max_row=20, values_only=True), start=1):
+                first = normalize_key(row[0] if len(row) > 0 else "")
+                second = normalize_key(row[1] if len(row) > 1 else "")
+                has_ean = any(normalize_key(value) in {"eanproduto", "ean"} for value in row)
+                if first in {"cod", "codigo"} and second == "descricao" and has_ean:
+                    header_row_index = index
+                    break
+            if not header_row_index:
+                continue
+
+            for row in sheet.iter_rows(min_row=header_row_index + 1, values_only=True):
+                code, data = supplier_catalog_data_from_row(row)
+                if code and data:
+                    out[code] = data
+    finally:
+        workbook.close()
+    return out
+
+
+def supplier_catalog_xlsx_data_by_product(pdf_folder_path, rows):
+    if not str(pdf_folder_path or "").strip():
+        return {}
+
+    folder = Path(pdf_folder_path).expanduser()
+    if not folder.exists() or not folder.is_dir():
+        return {}
+
+    catalog_by_factory_code = {}
+    for xlsx in sorted(folder.rglob("*.xlsx")):
+        catalog_by_factory_code.update(read_supplier_catalog_xlsx(xlsx))
+
+    if not catalog_by_factory_code:
+        return {}
+
+    mapped = {}
+    for row in rows:
+        summary = row_summary(row)
+        factory_code = normalize_factory_code(summary["factoryCode"])
+        data = catalog_by_factory_code.get(factory_code)
+        if data and summary["code"]:
+            mapped[summary["code"]] = {
+                "score": 100,
+                "file": "catalogo-xlsx",
+                "data": data,
+            }
+    return mapped
+
+
 def _supplier_pdf_folder_cache_key(pdf_folder_path):
     folder = Path(pdf_folder_path).expanduser()
     if not str(pdf_folder_path or "").strip():
@@ -1975,12 +2104,17 @@ def supplier_pdf_exact_match_codes(pdf_folder_path, rows, min_score=100):
         return set()
 
     folder, pdf_count, newest_mtime_ns = _supplier_pdf_folder_cache_key(pdf_folder_path)
-    if not folder or not pdf_count:
+    catalog_codes = set(supplier_catalog_xlsx_data_by_product(pdf_folder_path, rows))
+    if not folder:
         return set()
 
-    pdf_codes = _cached_supplier_pdf_internal_codes(folder, pdf_count, newest_mtime_ns)
+    pdf_codes = (
+        _cached_supplier_pdf_internal_codes(folder, pdf_count, newest_mtime_ns)
+        if pdf_count
+        else set()
+    )
     product_codes = {row_code(row) for row in rows}
-    return {code for code in product_codes if code and code in pdf_codes}
+    return {code for code in product_codes if code and (code in pdf_codes or code in catalog_codes)}
 
 
 def image_code_from_name(name):
