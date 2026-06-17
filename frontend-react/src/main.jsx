@@ -305,6 +305,7 @@ function App() {
   const [folderPath, setFolderPath] = useState("");
   const [search, setSearch] = useState("");
   const [showWithoutPhoto, setShowWithoutPhoto] = useState(false);
+  const [showOnlyWithSupplierPdf, setShowOnlyWithSupplierPdf] = useState(false);
   const [includeSheets, setIncludeSheets] = useState(false);
   const [includePrices, setIncludePrices] = useState(false);
   const [pricePanelOpen, setPricePanelOpen] = useState(false);
@@ -328,6 +329,12 @@ function App() {
   const [pdfAuditSearch, setPdfAuditSearch] = useState("");
   const [pdfAuditOnlyCompatible, setPdfAuditOnlyCompatible] = useState(false);
   const [pdfAuditMessage, setPdfAuditMessage] = useState("");
+  const [factoryRenameExcelPath, setFactoryRenameExcelPath] = useState("produtos codigo fabrica.xlsx");
+  const [factoryRename, setFactoryRename] = useState(null);
+  const [factoryRenameLoading, setFactoryRenameLoading] = useState(false);
+  const [factoryRenameSearch, setFactoryRenameSearch] = useState("");
+  const [factoryRenameOnlySelected, setFactoryRenameOnlySelected] = useState(false);
+  const [factoryRenameMessage, setFactoryRenameMessage] = useState("");
   const [editingUserId, setEditingUserId] = useState(null);
   const [userForm, setUserForm] = useState({
     username: "",
@@ -366,6 +373,23 @@ function App() {
           .includes(query),
       );
   }, [pdfAudit, pdfAuditOnlyCompatible, pdfAuditSearch]);
+  const filteredFactoryRenameItems = useMemo(() => {
+    const query = factoryRenameSearch.trim().toLowerCase();
+    return (factoryRename?.items || [])
+      .map((item, renameIndex) => ({ ...item, renameIndex }))
+      .filter((item) => !factoryRenameOnlySelected || item.selected)
+      .filter((item) =>
+        !query || [
+          item.sourceFile,
+          item.targetFile,
+          item.factoryCode,
+          item.productCode,
+          item.productDescription,
+          item.status,
+          item.message,
+        ].join(" ").toLowerCase().includes(query),
+      );
+  }, [factoryRename, factoryRenameOnlySelected, factoryRenameSearch]);
 
   function buildForm(extra = {}) {
     const form = new FormData();
@@ -540,6 +564,66 @@ function App() {
       setError(err.message);
     } finally {
       setPdfAuditLoading(false);
+    }
+  }
+
+  function updateFactoryRenameItem(index, changes) {
+    setFactoryRename((current) => ({
+      ...current,
+      items: current.items.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, ...changes } : item,
+      ),
+    }));
+  }
+
+  async function loadFactoryRenamePreview() {
+    setFactoryRenameLoading(true);
+    setFactoryRenameMessage("");
+    setError("");
+    try {
+      const form = new FormData();
+      form.append("excel_path", factoryRenameExcelPath);
+      form.append("supplier_pdf_folder_path", supplierPdfFolderPath);
+      const response = await fetch(`${API_URL}/api/admin/factory-code-rename/preview`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: form,
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(apiErrorMessage(data, "Falha ao gerar previa de renomeacao."));
+      setFactoryRename(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setFactoryRenameLoading(false);
+    }
+  }
+
+  async function applyFactoryRename() {
+    const items = (factoryRename?.items || [])
+      .filter((item) => item.selected && item.sourceFile && item.targetFile)
+      .map((item) => ({ sourceFile: item.sourceFile, targetFile: item.targetFile }));
+    if (!items.length) return;
+    if (!window.confirm(`Renomear ${items.length} ficha(s) usando codigo de fabrica?`)) return;
+
+    setFactoryRenameLoading(true);
+    setFactoryRenameMessage("");
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/api/admin/factory-code-rename/apply`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ folderPath: factoryRename.folderPath, items }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(apiErrorMessage(data, "Falha ao renomear as fichas."));
+      setFactoryRenameMessage(`${data.renamedCount} ficha(s) renomeada(s) com sucesso.`);
+      await loadFactoryRenamePreview();
+      setFactoryRenameMessage(`${data.renamedCount} ficha(s) renomeada(s) com sucesso.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setFactoryRenameLoading(false);
     }
   }
 
@@ -802,6 +886,7 @@ function App() {
       await fetch(`${API_URL}/api/health`);
       const effectiveSearch = next.search ?? search;
       const effectiveShowWithoutPhoto = next.showWithoutPhoto ?? showWithoutPhoto;
+      const effectiveShowOnlyWithSupplierPdf = next.showOnlyWithSupplierPdf ?? showOnlyWithSupplierPdf;
       const effectivePage = next.page ?? page;
       const response = await fetch(`${API_URL}/api/products`, {
         method: "POST",
@@ -809,6 +894,8 @@ function App() {
         body: buildForm({
           search: effectiveSearch,
           only_with_photo: String(!effectiveShowWithoutPhoto),
+          supplier_pdf_folder_path: supplierPdfFolderPath,
+          only_with_supplier_pdf: String(effectiveShowOnlyWithSupplierPdf),
           page: String(effectivePage),
           page_size: String(PAGE_SIZE),
         }),
@@ -1099,6 +1186,27 @@ function App() {
     }, 120);
   }
 
+  const activeTitle =
+    activeSection === "generator"
+      ? "Gerador de Excel com fotos"
+      : activeSection === "filler"
+        ? "Preenchedor de planilha"
+        : activeSection === "pdfAudit"
+          ? "Auditoria de fichas PDF"
+          : activeSection === "factoryRename"
+            ? "Renomear fichas por codigo"
+            : "Gerenciamento de usuarios";
+  const activeDescription =
+    activeSection === "generator"
+      ? "Veja os produtos com fotos, selecione itens e gere a planilha Excel."
+      : activeSection === "filler"
+        ? "Envie o Excel gerado e associe as fichas PDF na ordem das abas."
+        : activeSection === "pdfAudit"
+          ? "Revise as fichas sugeridas para os produtos com foto e inclua o codigo interno nos nomes."
+          : activeSection === "factoryRename"
+            ? "Leia os PDFs, encontre o codigo de fabrica na planilha e renomeie com previa."
+            : "Crie contas e controle senhas, status e niveis de permissao.";
+
   if (!session) return <LoginScreen onLogin={saveSession} />;
 
   return (
@@ -1156,6 +1264,21 @@ function App() {
           )}
           {session.user.role === "administrador" && (
             <button
+              className={activeSection === "factoryRename" ? "active" : ""}
+              onClick={() => {
+                setActiveSection("factoryRename");
+                setError("");
+              }}
+            >
+              <FileCode2 size={19} />
+              <span>
+                <strong>Renomear fichas</strong>
+                <small>Cruzar codigo de fabrica</small>
+              </span>
+            </button>
+          )}
+          {session.user.role === "administrador" && (
+            <button
               className={activeSection === "users" ? "active" : ""}
               onClick={() => {
                 setActiveSection("users");
@@ -1184,24 +1307,8 @@ function App() {
       <main className="app-shell">
       <header className="topbar">
         <div>
-          <h1>
-            {activeSection === "generator"
-              ? "Gerador de Excel com fotos"
-              : activeSection === "filler"
-                ? "Preenchedor de planilha"
-                : activeSection === "pdfAudit"
-                  ? "Auditoria de fichas PDF"
-                  : "Gerenciamento de usuários"}
-          </h1>
-          <p>
-            {activeSection === "generator"
-              ? "Veja os produtos com fotos, selecione itens e gere a planilha Excel."
-              : activeSection === "filler"
-                ? "Envie o Excel gerado e associe as fichas PDF na ordem das abas."
-                : activeSection === "pdfAudit"
-                  ? "Revise as fichas sugeridas para os produtos com foto e inclua o código interno nos nomes."
-                  : "Crie contas e controle senhas, status e níveis de permissão."}
-          </p>
+          <h1>{activeTitle}</h1>
+          <p>{activeDescription}</p>
         </div>
         {activeSection === "generator" && <div className="top-actions">
           <div className="segmented" aria-label="Modo de visualizacao">
@@ -1283,6 +1390,18 @@ function App() {
             }}
           />
           Mostrar sem foto
+        </label>
+
+        <label className="check-control">
+          <input
+            type="checkbox"
+            checked={showOnlyWithSupplierPdf}
+            onChange={(event) => {
+              setShowOnlyWithSupplierPdf(event.target.checked);
+              loadProducts({ showOnlyWithSupplierPdf: event.target.checked, page: 1 });
+            }}
+          />
+          Ficha 100%
         </label>
 
         <label className="check-control">
@@ -1902,6 +2021,106 @@ function App() {
         </section>
       )}
 
+      {activeSection === "factoryRename" && session.user.role === "administrador" && (
+        <section className="factory-rename-tool">
+          <div className="pdf-audit-controls">
+            <label className="folder-input">
+              <FileSpreadsheet size={17} />
+              <input
+                value={factoryRenameExcelPath}
+                onChange={(event) => setFactoryRenameExcelPath(event.target.value)}
+                placeholder="Planilha produtos codigo fabrica.xlsx"
+              />
+            </label>
+            <label className="folder-input">
+              <FolderOpen size={17} />
+              <input
+                value={supplierPdfFolderPath}
+                onChange={(event) => setSupplierPdfFolderPath(event.target.value)}
+                placeholder="Pasta das fichas PDF"
+              />
+            </label>
+            <button className="secondary" onClick={loadFactoryRenamePreview} disabled={factoryRenameLoading}>
+              {factoryRenameLoading ? <Loader2 className="spin" size={17} /> : <Search size={17} />}
+              Gerar previa
+            </button>
+            <button
+              className="primary"
+              onClick={applyFactoryRename}
+              disabled={factoryRenameLoading || !factoryRename?.items?.some((item) => item.selected && item.targetFile)}
+            >
+              <Pencil size={17} />
+              Renomear selecionadas
+            </button>
+          </div>
+
+          {factoryRenameMessage && <div className="pdf-audit-message">{factoryRenameMessage}</div>}
+
+          {factoryRename && (
+            <>
+              <div className="pdf-audit-summary">
+                <span>Produtos na planilha: {factoryRename.productCount}</span>
+                <span>PDFs encontrados: {factoryRename.pdfCount}</span>
+                <span className="ok">Para renomear: {factoryRename.items.filter((item) => item.selected).length}</span>
+                <span className="warn">Ignorados: {factoryRename.items.filter((item) => !item.selected).length}</span>
+                <button
+                  type="button"
+                  className={`pdf-audit-filter ${factoryRenameOnlySelected ? "active" : ""}`}
+                  onClick={() => setFactoryRenameOnlySelected((value) => !value)}
+                >
+                  Selecionadas
+                </button>
+                <label className="search-input">
+                  <Search size={17} />
+                  <input
+                    value={factoryRenameSearch}
+                    onChange={(event) => setFactoryRenameSearch(event.target.value)}
+                    placeholder="Buscar codigo, produto ou arquivo"
+                  />
+                </label>
+              </div>
+
+              <div className="factory-rename-list">
+                <div className="factory-rename-row factory-rename-header">
+                  <span>Usar</span>
+                  <span>Status</span>
+                  <span>Codigo</span>
+                  <span>Arquivo atual</span>
+                  <span>Novo nome</span>
+                </div>
+                {filteredFactoryRenameItems.map((item) => (
+                  <div className={`factory-rename-row ${item.selected ? "selected" : ""}`} key={`${item.sourceFile}-${item.renameIndex}`}>
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(item.selected)}
+                        disabled={!item.targetFile}
+                        onChange={(event) => updateFactoryRenameItem(item.renameIndex, { selected: event.target.checked })}
+                      />
+                    </span>
+                    <span className={item.selected ? "ok" : item.status === "ok" ? "ok" : "warn"}>
+                      {item.status}
+                    </span>
+                    <span className="factory-code-cell">
+                      <strong>{item.productCode || item.factoryCode || "-"}</strong>
+                      <small>{item.productDescription || item.message}</small>
+                    </span>
+                    <span title={item.sourceFile}>{item.sourceFile}</span>
+                    <span title={item.targetFile || item.message}>{item.targetFile || item.message}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {!factoryRename && !factoryRenameLoading && (
+            <div className="pdf-audit-empty">
+              Informe a planilha e a pasta das fichas. A previa nao altera nenhum arquivo.
+            </div>
+          )}
+        </section>
+      )}
+
       {activeSection === "users" && session.user.role === "administrador" && (
         <section className="users-tool">
           <form className="user-form" onSubmit={saveUser}>
@@ -2032,6 +2251,7 @@ function App() {
         <span>Filtrados: {meta?.filteredTotal ?? 0}</span>
         <span>Pagina: {meta?.page ?? page}</span>
         <span>Fotos indexadas: {meta?.photoCount ?? 0}</span>
+        {showOnlyWithSupplierPdf && <span>Fichas 100%: {meta?.supplierPdfCount ?? 0}</span>}
         <span>Selecionados: {selectedCount}</span>
         <span>Visiveis selecionados: {visibleSelectedCount}</span>
         <span className={meta?.templateFound ? "ok" : "warn"}>

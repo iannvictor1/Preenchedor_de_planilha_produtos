@@ -32,6 +32,8 @@ from core import (
     nfe_xml_cest_preview,
     ordered_pdf_folder_suggestions,
     ordered_pdf_preview,
+    apply_factory_code_pdf_renames,
+    preview_factory_code_pdf_renames,
     read_product_prices,
     read_pdf_files_from_folder_selection,
     rename_audited_product_pdfs,
@@ -62,6 +64,16 @@ class PdfAuditRenameItem(BaseModel):
 class PdfAuditRenameRequest(BaseModel):
     folderPath: str
     items: list[PdfAuditRenameItem]
+
+
+class FactoryCodeRenameItem(BaseModel):
+    sourceFile: str
+    targetFile: str
+
+
+class FactoryCodeRenameRequest(BaseModel):
+    folderPath: str
+    items: list[FactoryCodeRenameItem]
 
 app.add_middleware(
     CORSMiddleware,
@@ -251,6 +263,32 @@ def admin_pdf_audit_rename(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/admin/factory-code-rename/preview")
+async def admin_factory_code_rename_preview(
+    excel_path: Annotated[str, Form()] = "produtos codigo fabrica.xlsx",
+    supplier_pdf_folder_path: Annotated[str, Form()] = "",
+    current_user: dict = Depends(require_admin),
+):
+    try:
+        return preview_factory_code_pdf_renames(excel_path, supplier_pdf_folder_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/admin/factory-code-rename/apply")
+def admin_factory_code_rename_apply(
+    request: FactoryCodeRenameRequest,
+    current_user: dict = Depends(require_admin),
+):
+    try:
+        return apply_factory_code_pdf_renames(
+            request.folderPath,
+            [item.dict() for item in request.items],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/excel-pdf-order/preview")
 async def excel_pdf_order_preview(
     workbook_file: Annotated[UploadFile | None, File()] = None,
@@ -396,8 +434,10 @@ async def products(
     csv_file: Annotated[UploadFile | None, File()] = None,
     zip_file: Annotated[UploadFile | None, File()] = None,
     folder_path: Annotated[str, Form()] = "",
+    supplier_pdf_folder_path: Annotated[str, Form()] = "",
     search: Annotated[str, Form()] = "",
     only_with_photo: Annotated[bool, Form()] = False,
+    only_with_supplier_pdf: Annotated[bool, Form()] = False,
     page: Annotated[int, Form()] = 1,
     page_size: Annotated[int, Form()] = 120,
     current_user: dict = Depends(require_user),
@@ -407,8 +447,10 @@ async def products(
             csv_bytes=await read_optional_file(csv_file),
             zip_bytes=await read_optional_file(zip_file),
             folder_path=folder_path,
+            supplier_pdf_folder_path=supplier_pdf_folder_path,
             search=search,
             only_with_photo=only_with_photo,
+            only_with_supplier_pdf=only_with_supplier_pdf,
             page=page,
             page_size=page_size,
         )

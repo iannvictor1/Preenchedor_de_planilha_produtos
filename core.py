@@ -7,6 +7,7 @@ import re
 import unicodedata
 import zipfile
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -33,6 +34,41 @@ IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 TEMPLATE_SUFFIX = "FICHA CADASTRO PRODUTO C&M.xlsx"
 PRICE_FILE = BASE_DIR / "preço.xlsx"
 DEFAULT_PRICE_REGION = 1
+INVALID_FILENAME_CHARS = r'<>:"/\|?*'
+FACTORY_RENAME_DESCRIPTION_STOPWORDS = {
+    "COM",
+    "CONG",
+    "CONGELADO",
+    "CONGELADA",
+    "COOPAVEL",
+    "DE",
+    "DO",
+    "DA",
+    "DOS",
+    "DAS",
+    "EM",
+    "OSSO",
+    "OSSOS",
+    "PARA",
+    "SEM",
+    "SUINO",
+    "SUINA",
+}
+FACTORY_RENAME_CODE_PATTERNS = [
+    re.compile(
+        r"Nomenclatura Comercial\s+C[oÓó]digo Interno\s+.+?\s+([0-9][A-Z0-9.\-/]*)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(r"\bC[oÓó]digo\s+INTERNO\s*:?\s+([0-9][A-Z0-9.\-/]*)\b", re.IGNORECASE),
+    re.compile(r"\bC[oÓó]digo\s+PRODUTO\s*:\s*([0-9][A-Z0-9.\-/]*)\b", re.IGNORECASE),
+    re.compile(r"\bC[oÓó]digo\s+DO\s+PRODUTO\s*:\s*([0-9][A-Z0-9.\-/]*)\b", re.IGNORECASE),
+    re.compile(r"\bRef\s+Fabricante\s*\(produto\)\s*:\s*([0-9][A-Z0-9.\-/]*)\b", re.IGNORECASE),
+    re.compile(
+        r"Nome\s+Comercial\s*C[oÓó]digo\b.*?\b([0-9][A-Z0-9.\-/]*)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(r"\bC[oÓó]digo\s*[:\-]\s*([0-9][A-Z0-9.\-/]*)\b", re.IGNORECASE),
+]
 MATCH_STOP_TOKENS = {
     "FICHA",
     "FICHAS",
@@ -1115,6 +1151,383 @@ def rename_audited_product_pdfs(pdf_folder_path, renames):
     return {"renamedCount": len(renamed), "items": renamed}
 
 
+@dataclass(frozen=True)
+class FactoryRenameProduct:
+    internal_code: str
+    description: str
+    factory_code: str
+
+
+def factory_rename_normalize_excel_value(value):
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def factory_rename_normalize_code(value):
+    return re.sub(r"\s+", "", str(value or "")).upper().strip()
+
+
+def factory_rename_code_without_leading_zeroes(value):
+    normalized = factory_rename_normalize_code(value)
+    stripped = normalized.lstrip("0")
+    return stripped or "0"
+
+
+def factory_rename_code_without_trailing_zero_suffix(value):
+    return re.sub(r"-0+$", "", factory_rename_normalize_code(value))
+
+
+def clean_filename_part(value):
+    normalized = unicodedata.normalize("NFKC", str(value or ""))
+    cleaned = "".join("_" if char in INVALID_FILENAME_CHARS else char for char in normalized)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned.rstrip(". ")
+
+
+def factory_rename_search_text(value):
+    without_accents = unicodedata.normalize("NFKD", str(value or ""))
+    without_accents = "".join(
+        char for char in without_accents if not unicodedata.combining(char)
+    )
+    return re.sub(r"[^A-Z0-9]+", " ", without_accents.upper())
+
+
+def factory_rename_description_tokens(description):
+    text = factory_rename_search_text(description)
+    return {
+        token
+        for token in text.split()
+        if len(token) >= 4 and token not in FACTORY_RENAME_DESCRIPTION_STOPWORDS
+    }
+
+
+def factory_rename_description_score(product, pdf_path, pdf_text):
+    tokens = factory_rename_description_tokens(product.description)
+    if not tokens:
+        return 1
+    searchable = f"{pdf_path.stem} {pdf_text}"
+    searchable_words = set(factory_rename_search_text(searchable).split())
+    return len(tokens & searchable_words)
+
+
+def choose_factory_rename_description_match(products, pdf_path, pdf_text):
+    scored = [
+        (factory_rename_description_score(product, pdf_path, pdf_text), product)
+        for product in products
+    ]
+    scored = [item for item in scored if item[0] > 0]
+    if not scored:
+        return None
+    scored.sort(key=lambda item: item[0], reverse=True)
+    if len(scored) == 1 or scored[0][0] > scored[1][0]:
+        return scored[0][1]
+    return None
+
+
+def factory_rename_unique_path(path):
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    counter = 2
+    while True:
+        candidate = parent / f"{stem} ({counter}){suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def load_factory_rename_products(excel_path):
+    path = Path(excel_path).expanduser()
+    if not str(excel_path or "").strip():
+        raise ValueError("Informe a planilha de codigos de fabrica.")
+    if not path.exists() or not path.is_file():
+        raise ValueError(f"Planilha de codigos nao encontrada: {path}")
+
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except Exception as exc:
+        raise ValueError("Nao consegui ler a planilha de codigos.") from exc
+
+    sheet = workbook[workbook.sheetnames[0]]
+    rows = sheet.iter_rows(values_only=True)
+    try:
+        header_row = next(rows)
+    except StopIteration as exc:
+        workbook.close()
+        raise ValueError("A planilha de codigos esta vazia.") from exc
+
+    headers = {
+        normalize_key(value): index
+        for index, value in enumerate(header_row)
+        if value is not None
+    }
+    required = ["codigointerno", "descricao", "codigofabrica"]
+    missing = [header for header in required if header not in headers]
+    if missing:
+        workbook.close()
+        raise ValueError("Colunas nao encontradas no Excel: CODIGO_INTERNO, DESCRICAO, CODIGO_FABRICA")
+
+    exact = {}
+    no_zeroes = {}
+    internal = {}
+    product_count = 0
+    for row in rows:
+        internal_code = factory_rename_normalize_excel_value(row[headers["codigointerno"]])
+        description = factory_rename_normalize_excel_value(row[headers["descricao"]])
+        factory_code = factory_rename_normalize_excel_value(row[headers["codigofabrica"]])
+        if not internal_code or not description or not factory_code:
+            continue
+
+        product = FactoryRenameProduct(internal_code, description, factory_code)
+        product_count += 1
+        internal[factory_rename_normalize_code(internal_code)] = product
+        exact.setdefault(factory_rename_normalize_code(factory_code), []).append(product)
+        without_suffix = factory_rename_code_without_trailing_zero_suffix(factory_code)
+        if without_suffix != factory_rename_normalize_code(factory_code):
+            exact.setdefault(without_suffix, []).append(product)
+        no_zeroes.setdefault(factory_rename_code_without_leading_zeroes(factory_code), []).append(product)
+
+    workbook.close()
+    return exact, no_zeroes, internal, product_count
+
+
+def extract_factory_rename_pdf_text(pdf_path):
+    reader = PdfReader(str(pdf_path))
+    return "\n".join(page.extract_text() or "" for page in reader.pages)
+
+
+def extract_factory_rename_filename_code(pdf_path):
+    match = re.match(
+        r"^\s*(?:ET\s+)?([A-Z0-9][A-Z0-9.\-/]{2,})\b",
+        pdf_path.stem,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    code = factory_rename_normalize_code(match.group(1).rstrip(".-"))
+    if not re.search(r"\d", code):
+        return None
+    return code
+
+
+def extract_factory_rename_code(pdf_path):
+    text = extract_factory_rename_pdf_text(pdf_path)
+    for pattern in FACTORY_RENAME_CODE_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return factory_rename_normalize_code(match.group(1).rstrip(".-")), text
+    filename_code = extract_factory_rename_filename_code(pdf_path)
+    if filename_code:
+        return filename_code, text
+    return None, text
+
+
+def find_factory_rename_product(factory_code, exact, no_zeroes, pdf_path, pdf_text):
+    exact_matches = exact.get(factory_rename_normalize_code(factory_code), [])
+    if len(exact_matches) == 1:
+        return exact_matches[0], "exato"
+    if len(exact_matches) > 1:
+        description_match = choose_factory_rename_description_match(exact_matches, pdf_path, pdf_text)
+        if description_match:
+            return description_match, "exato + descricao"
+        return None, "duplicado"
+
+    relaxed_matches = no_zeroes.get(factory_rename_code_without_leading_zeroes(factory_code), [])
+    if len(relaxed_matches) == 1:
+        return relaxed_matches[0], "sem zeros a esquerda"
+    if len(relaxed_matches) > 1:
+        description_match = choose_factory_rename_description_match(relaxed_matches, pdf_path, pdf_text)
+        if description_match:
+            return description_match, "sem zeros a esquerda + descricao"
+        return None, "duplicado"
+
+    return None, "nao encontrado"
+
+
+def factory_rename_target_path(pdf_path, product):
+    name = clean_filename_part(f"{product.internal_code} - {product.description}") + ".pdf"
+    return pdf_path.with_name(name)
+
+
+def factory_rename_unique_preview_path(path, planned_targets):
+    if not path.exists() and path not in planned_targets:
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    counter = 2
+    while True:
+        candidate = parent / f"{stem} ({counter}){suffix}"
+        if not candidate.exists() and candidate not in planned_targets:
+            return candidate
+        counter += 1
+
+
+def preview_factory_code_pdf_renames(excel_path, pdf_folder_path):
+    folder = Path(pdf_folder_path).expanduser()
+    if not str(pdf_folder_path or "").strip():
+        raise ValueError("Informe a pasta das fichas.")
+    if not folder.exists() or not folder.is_dir():
+        raise ValueError(f"Pasta de fichas nao encontrada: {folder}")
+
+    exact, no_zeroes, internal, product_count = load_factory_rename_products(excel_path)
+    folder = folder.resolve()
+    pdfs = sorted(folder.rglob("*.pdf"))
+    if not pdfs:
+        raise ValueError(f"Nenhum PDF encontrado em: {folder}")
+
+    items = []
+    planned_targets = set()
+    for pdf_path in pdfs:
+        rel_name = str(pdf_path.relative_to(folder))
+        try:
+            factory_code, pdf_text = extract_factory_rename_code(pdf_path)
+        except Exception as exc:
+            items.append({
+                "sourceFile": rel_name,
+                "factoryCode": "",
+                "targetFile": "",
+                "productCode": "",
+                "productDescription": "",
+                "status": "erro",
+                "message": f"Falha lendo PDF ({exc})",
+                "selected": False,
+            })
+            continue
+
+        if not factory_code:
+            items.append({
+                "sourceFile": rel_name,
+                "factoryCode": "",
+                "targetFile": "",
+                "productCode": "",
+                "productDescription": "",
+                "status": "sem_codigo",
+                "message": "Nao encontrei codigo na ficha",
+                "selected": False,
+            })
+            continue
+
+        product, status = find_factory_rename_product(factory_code, exact, no_zeroes, pdf_path, pdf_text)
+        filename_code = extract_factory_rename_filename_code(pdf_path)
+        filename_internal_product = internal.get(factory_rename_normalize_code(filename_code)) if filename_code else None
+        if filename_internal_product is not None and (
+            product is None
+            or product.internal_code != filename_internal_product.internal_code
+            or factory_rename_description_score(product, pdf_path, pdf_text) <= 0
+        ):
+            product = filename_internal_product
+            status = "codigo interno pelo nome do arquivo"
+            factory_code = filename_code
+        if product is None and filename_code and filename_code != factory_code:
+            filename_product, filename_status = find_factory_rename_product(
+                filename_code, exact, no_zeroes, pdf_path, pdf_text
+            )
+            if filename_product is not None:
+                factory_code = filename_code
+                product = filename_product
+                status = f"{filename_status} pelo nome do arquivo"
+
+        if product is None:
+            items.append({
+                "sourceFile": rel_name,
+                "factoryCode": factory_code,
+                "targetFile": "",
+                "productCode": "",
+                "productDescription": "",
+                "status": "sem_match",
+                "message": f"Codigo fabrica {factory_code} ({status})",
+                "selected": False,
+            })
+            continue
+
+        if factory_rename_description_score(product, pdf_path, pdf_text) <= 0:
+            items.append({
+                "sourceFile": rel_name,
+                "factoryCode": factory_code,
+                "targetFile": "",
+                "productCode": product.internal_code,
+                "productDescription": product.description,
+                "status": "suspeito",
+                "message": "Codigo bate, mas a descricao nao aparece na ficha",
+                "selected": False,
+            })
+            continue
+
+        raw_target_path = factory_rename_target_path(pdf_path, product)
+        already_ok = pdf_path.resolve() == raw_target_path.resolve()
+        target_path = raw_target_path
+        if not already_ok:
+            target_path = factory_rename_unique_preview_path(raw_target_path, planned_targets)
+        planned_targets.add(target_path)
+        items.append({
+            "sourceFile": rel_name,
+            "factoryCode": factory_code,
+            "targetFile": str(target_path.relative_to(folder)),
+            "productCode": product.internal_code,
+            "productDescription": product.description,
+            "status": "ok" if already_ok else "renomear",
+            "message": "Ja esta com o nome correto" if already_ok else f"Match {status}",
+            "selected": not already_ok,
+        })
+
+    return {
+        "folderPath": str(folder),
+        "excelPath": str(Path(excel_path).expanduser().resolve()),
+        "productCount": product_count,
+        "pdfCount": len(pdfs),
+        "renameCount": sum(1 for item in items if item["selected"] and item["targetFile"]),
+        "skippedCount": sum(1 for item in items if not item["selected"]),
+        "items": items,
+    }
+
+
+def apply_factory_code_pdf_renames(pdf_folder_path, renames):
+    folder = Path(pdf_folder_path).expanduser()
+    if not str(pdf_folder_path or "").strip() or not folder.is_dir():
+        raise ValueError("Pasta de fichas invalida.")
+    folder = folder.resolve()
+    prepared = []
+    seen_sources = set()
+    seen_targets = set()
+
+    for item in renames or []:
+        source_name = str(item.get("sourceFile", "")).strip()
+        target_name = str(item.get("targetFile", "")).strip()
+        if not source_name or not target_name:
+            continue
+        source = (folder / source_name).resolve()
+        target = (folder / target_name).resolve()
+        if folder not in source.parents or not source.is_file() or source.suffix.lower() != ".pdf":
+            raise ValueError(f"Ficha invalida ou nao encontrada: {source_name}")
+        if folder not in target.parents or target.suffix.lower() != ".pdf":
+            raise ValueError(f"Nome de destino invalido: {target_name}")
+        if source in seen_sources:
+            raise ValueError(f"A mesma ficha foi selecionada mais de uma vez: {source_name}")
+        if target in seen_targets:
+            raise ValueError(f"Duas fichas resultariam no mesmo nome: {target.name}")
+        if target != source and target.exists():
+            raise ValueError(f"Ja existe uma ficha chamada: {target.name}")
+        prepared.append((source, target, source_name))
+        seen_sources.add(source)
+        seen_targets.add(target)
+
+    renamed = []
+    for source, target, source_name in prepared:
+        if source != target:
+            source.rename(target)
+        renamed.append({
+            "sourceFile": source_name,
+            "targetFile": str(target.relative_to(folder)),
+        })
+    return {"renamedCount": len(renamed), "items": renamed}
+
+
 def fill_workbook_with_ordered_pdfs(workbook_bytes, pdf_files):
     if not workbook_bytes:
         raise ValueError("Envie o Excel gerado para preencher.")
@@ -1514,6 +1927,60 @@ def supplier_pdf_data_by_product(pdf_folder_path, rows, min_score=100):
             }
 
     return best_by_code
+
+
+def _supplier_pdf_folder_cache_key(pdf_folder_path):
+    folder = Path(pdf_folder_path).expanduser()
+    if not str(pdf_folder_path or "").strip():
+        return "", 0, 0
+    if not folder.exists():
+        raise ValueError(f"Pasta de fichas nao encontrada: {folder}")
+    if not folder.is_dir():
+        raise ValueError(f"O caminho das fichas nao e uma pasta: {folder}")
+
+    folder = folder.resolve()
+    pdfs = list(folder.rglob("*.pdf"))
+    newest = max((pdf.stat().st_mtime_ns for pdf in pdfs), default=0)
+    return str(folder), len(pdfs), newest
+
+
+@lru_cache(maxsize=4)
+def _cached_supplier_pdf_labels(folder, pdf_count, newest_mtime_ns):
+    base = Path(folder)
+    labels = []
+    for pdf in sorted(base.rglob("*.pdf")):
+        label = supplier_pdf_text_label(pdf)
+        labels.append({
+            "path": str(pdf),
+            "file": str(pdf.relative_to(base)),
+            "label": label,
+            "brand": supplier_pdf_brand(pdf, label),
+            "internalCode": supplier_pdf_internal_code(pdf),
+        })
+    return labels
+
+
+@lru_cache(maxsize=8)
+def _cached_supplier_pdf_internal_codes(folder, pdf_count, newest_mtime_ns):
+    base = Path(folder)
+    return {
+        code
+        for code in (supplier_pdf_internal_code(pdf) for pdf in base.rglob("*.pdf"))
+        if code
+    }
+
+
+def supplier_pdf_exact_match_codes(pdf_folder_path, rows, min_score=100):
+    if not str(pdf_folder_path or "").strip():
+        return set()
+
+    folder, pdf_count, newest_mtime_ns = _supplier_pdf_folder_cache_key(pdf_folder_path)
+    if not folder or not pdf_count:
+        return set()
+
+    pdf_codes = _cached_supplier_pdf_internal_codes(folder, pdf_count, newest_mtime_ns)
+    product_codes = {row_code(row) for row in rows}
+    return {code for code in product_codes if code and code in pdf_codes}
 
 
 def image_code_from_name(name):
@@ -1981,13 +2448,20 @@ def list_products(
     csv_bytes=None,
     zip_bytes=None,
     folder_path="",
+    supplier_pdf_folder_path="",
     search="",
     only_with_photo=False,
+    only_with_supplier_pdf=False,
     page=1,
     page_size=120,
 ):
     rows, zip_file, zip_mapping, folder_mapping = load_inputs(csv_bytes, zip_bytes, folder_path)
     image_codes = set(zip_mapping) | set(folder_mapping)
+    supplier_pdf_codes = (
+        supplier_pdf_exact_match_codes(supplier_pdf_folder_path, rows)
+        if only_with_supplier_pdf
+        else set()
+    )
     filtered_rows = []
     query = search.lower().strip()
     page = max(1, int(page or 1))
@@ -1999,6 +2473,8 @@ def list_products(
         code = row_code(row)
         item = row_summary(row, image_codes)
         if only_with_photo and not item["hasPhoto"]:
+            continue
+        if only_with_supplier_pdf and code not in supplier_pdf_codes:
             continue
         filtered_rows.append(row)
 
@@ -2018,6 +2494,7 @@ def list_products(
             photo_data_url = zip_preview_data_url(code, zip_file, zip_mapping)
         item = row_summary(row, image_codes, photo_data_url, photo_version)
         item["originalPrice"] = prices.get(code)
+        item["hasSupplierPdf"] = code in supplier_pdf_codes if only_with_supplier_pdf else False
         products.append(item)
 
     return {
@@ -2027,6 +2504,7 @@ def list_products(
         "pageSize": page_size,
         "hasNextPage": end < len(filtered_rows),
         "photoCount": len(image_codes),
+        "supplierPdfCount": len(supplier_pdf_codes),
         "templateFound": find_template_file().exists(),
         "templateName": find_template_file().name if find_template_file().exists() else "",
         "products": products,

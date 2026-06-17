@@ -525,6 +525,70 @@ label.file-control {
   text-align: center;
 }
 
+.factory-rename-tool {
+  display: grid;
+  gap: 14px;
+}
+
+.factory-rename-list {
+  display: grid;
+  gap: 7px;
+  overflow-x: auto;
+}
+
+.factory-rename-row {
+  min-width: 1120px;
+  display: grid;
+  grid-template-columns: 54px 100px minmax(250px, 0.95fr) minmax(300px, 1.2fr) minmax(360px, 1.4fr);
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #354347;
+  padding: 9px 10px;
+  background: #141a1c;
+  color: #dce3e0;
+  font-size: 13px;
+}
+
+.factory-rename-row.selected {
+  border-color: #526e35;
+  background: #171f18;
+}
+
+.factory-rename-header {
+  border: 0;
+  padding-top: 0;
+  padding-bottom: 2px;
+  background: transparent;
+  color: #81948d;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.factory-rename-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.factory-code-cell {
+  display: grid;
+  gap: 4px;
+}
+
+.factory-code-cell strong,
+.factory-code-cell small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.factory-code-cell small {
+  color: var(--muted);
+}
+
 .users-tool {
   display: grid;
   grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
