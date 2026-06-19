@@ -29,6 +29,8 @@ import {
   Printer,
   DollarSign,
   User,
+  History,
+  Settings,
 } from "lucide-react";
 import "./styles.css";
 
@@ -47,7 +49,12 @@ function resolveApiUrl() {
 const API_URL = resolveApiUrl();
 const MANY_SHEETS_LIMIT = 200;
 const PAGE_SIZE = 120;
+const DEFAULT_CSV_PATH = "Listagem dos produtos.xlsx.csv";
 const DEFAULT_SUPPLIER_PDF_FOLDER = "Fichas-20260609T161612Z-3-001\\Fichas";
+const DEFAULT_PHOTOS_FOLDER = "Fotos Cod";
+const DEFAULT_FACTORY_RENAME_EXCEL = "produtos codigo fabrica.xlsx";
+const DEFAULT_PRICE_PATH = "preço.xlsx";
+const SETTINGS_STORAGE_KEY = "productSystemSettings";
 const KNOWN_BRANDS = [
   "CARAPRETA",
   "ALFAMA",
@@ -84,6 +91,30 @@ function storedSession() {
   } catch {
     localStorage.removeItem("productSystemSession");
     return null;
+  }
+}
+
+function storedSettings() {
+  try {
+    const settings = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) || "null") || {};
+    return {
+      folderPath: String(settings.folderPath || DEFAULT_PHOTOS_FOLDER),
+      supplierPdfFolderPath: String(settings.supplierPdfFolderPath || DEFAULT_SUPPLIER_PDF_FOLDER),
+      factoryRenameExcelPath: String(settings.factoryRenameExcelPath || DEFAULT_FACTORY_RENAME_EXCEL),
+      csvPath: String(settings.csvPath || DEFAULT_CSV_PATH),
+      zipPath: String(settings.zipPath || ""),
+      pricePath: String(settings.pricePath || DEFAULT_PRICE_PATH),
+    };
+  } catch {
+    localStorage.removeItem(SETTINGS_STORAGE_KEY);
+    return {
+      folderPath: DEFAULT_PHOTOS_FOLDER,
+      supplierPdfFolderPath: DEFAULT_SUPPLIER_PDF_FOLDER,
+      factoryRenameExcelPath: DEFAULT_FACTORY_RENAME_EXCEL,
+      csvPath: DEFAULT_CSV_PATH,
+      zipPath: "",
+      pricePath: DEFAULT_PRICE_PATH,
+    };
   }
 }
 
@@ -203,6 +234,55 @@ function apiErrorMessage(data, fallback) {
   return String(detail);
 }
 
+function formatAuditDate(value) {
+  if (!value) return "-";
+  const normalized = String(value).includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime())
+    ? String(value)
+    : date.toLocaleString("pt-BR", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+}
+
+function auditActionLabel(action) {
+  const labels = {
+    "user.create": "Criou usuario",
+    "user.update": "Atualizou usuario",
+    "user.delete": "Excluiu usuario",
+    "pdf_audit.rename": "Renomeou fichas",
+    "factory_code_rename.apply": "Renomeou por codigo",
+    "excel_xml_cest.fill": "Preencheu CEST",
+    "excel_pdf_order.fill_upload": "Preencheu por PDFs",
+    "excel_pdf_order.fill_folder": "Preencheu por pasta",
+    "workbook.generate": "Gerou planilha",
+  };
+  return labels[action] || action || "-";
+}
+
+function auditDetailsText(details = {}) {
+  const parts = [];
+  if (details.renamedCount !== undefined) parts.push(`${details.renamedCount} renomeada(s)`);
+  if (details.requestedCount !== undefined) parts.push(`${details.requestedCount} solicitada(s)`);
+  if (details.selectedCount !== undefined) parts.push(`${details.selectedCount} selecionada(s)`);
+  if (details.pdfCount !== undefined) parts.push(`${details.pdfCount} PDF(s)`);
+  if (details.xmlCount !== undefined) parts.push(`${details.xmlCount} XML(s)`);
+  if (details.customPriceCount !== undefined) parts.push(`${details.customPriceCount} preco(s)`);
+  if (details.username) parts.push(details.username);
+  if (details.role) parts.push(details.role);
+  if (details.folderPath) parts.push(details.folderPath);
+  if (details.error) parts.push(`Erro: ${details.error}`);
+  return parts.join(" | ") || "-";
+}
+
+function canUndoAuditEvent(event) {
+  return event?.status === "success" && ["pdf_audit.rename", "factory_code_rename.apply"].includes(event.action);
+}
+
 function normalizeMatchText(value) {
   return String(value || "")
     .normalize("NFD")
@@ -282,6 +362,7 @@ const PDF_PREVIEW_FIELDS = [
 ];
 
 function App() {
+  const initialSettings = useMemo(() => storedSettings(), []);
   const orderedWorkbookInputRef = useRef(null);
   const orderedPdfInputRef = useRef(null);
   const orderedAddPdfInputRef = useRef(null);
@@ -290,7 +371,7 @@ function App() {
   const [zipFile, setZipFile] = useState(null);
   const [orderedWorkbookFile, setOrderedWorkbookFile] = useState(null);
   const [orderedPdfFiles, setOrderedPdfFiles] = useState([]);
-  const [supplierPdfFolderPath, setSupplierPdfFolderPath] = useState(DEFAULT_SUPPLIER_PDF_FOLDER);
+  const [supplierPdfFolderPath, setSupplierPdfFolderPath] = useState(initialSettings.supplierPdfFolderPath);
   const [showPdfFolderEditor, setShowPdfFolderEditor] = useState(false);
   const [orderedPreview, setOrderedPreview] = useState(null);
   const [orderedPreviewStale, setOrderedPreviewStale] = useState(false);
@@ -302,7 +383,7 @@ function App() {
   const [xmlPreview, setXmlPreview] = useState(null);
   const [xmlLoading, setXmlLoading] = useState(false);
   const [xmlFilling, setXmlFilling] = useState(false);
-  const [folderPath, setFolderPath] = useState("");
+  const [folderPath, setFolderPath] = useState(initialSettings.folderPath);
   const [search, setSearch] = useState("");
   const [showWithoutPhoto, setShowWithoutPhoto] = useState(false);
   const [showOnlyWithSupplierPdf, setShowOnlyWithSupplierPdf] = useState(false);
@@ -324,12 +405,18 @@ function App() {
   const [editedPrices, setEditedPrices] = useState({});
   const [users, setUsers] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [auditEvents, setAuditEvents] = useState([]);
+  const [auditLoading, setAuditLoading] = useState(false);
   const [pdfAudit, setPdfAudit] = useState(null);
   const [pdfAuditLoading, setPdfAuditLoading] = useState(false);
   const [pdfAuditSearch, setPdfAuditSearch] = useState("");
   const [pdfAuditOnlyCompatible, setPdfAuditOnlyCompatible] = useState(false);
   const [pdfAuditMessage, setPdfAuditMessage] = useState("");
-  const [factoryRenameExcelPath, setFactoryRenameExcelPath] = useState("produtos codigo fabrica.xlsx");
+  const [factoryRenameExcelPath, setFactoryRenameExcelPath] = useState(initialSettings.factoryRenameExcelPath);
+  const [activeSettings, setActiveSettings] = useState(initialSettings);
+  const [settingsForm, setSettingsForm] = useState(initialSettings);
+  const [settingsStatus, setSettingsStatus] = useState([]);
+  const [settingsTesting, setSettingsTesting] = useState(false);
   const [factoryRename, setFactoryRename] = useState(null);
   const [factoryRenameLoading, setFactoryRenameLoading] = useState(false);
   const [factoryRenameSearch, setFactoryRenameSearch] = useState("");
@@ -391,11 +478,23 @@ function App() {
       );
   }, [factoryRename, factoryRenameOnlySelected, factoryRenameSearch]);
 
+  const auditSummary = useMemo(() => {
+    const successCount = auditEvents.filter((event) => event.status === "success").length;
+    return {
+      total: auditEvents.length,
+      success: successCount,
+      error: auditEvents.length - successCount,
+    };
+  }, [auditEvents]);
+
   function buildForm(extra = {}) {
     const form = new FormData();
     if (csvFile) form.append("csv_file", csvFile);
     if (zipFile) form.append("zip_file", zipFile);
     form.append("folder_path", folderPath);
+    if (!csvFile && activeSettings.csvPath.trim()) form.append("csv_path", activeSettings.csvPath.trim());
+    if (!zipFile && activeSettings.zipPath.trim()) form.append("zip_path", activeSettings.zipPath.trim());
+    if (activeSettings.pricePath.trim()) form.append("price_path", activeSettings.pricePath.trim());
     Object.entries(extra).forEach(([key, value]) => form.append(key, value));
     return form;
   }
@@ -424,6 +523,63 @@ function App() {
     setUserForm({ username: "", password: "", role: "vendedor", active: true });
   }
 
+  function saveSettings(event) {
+    event.preventDefault();
+    const nextSettings = {
+      folderPath: settingsForm.folderPath.trim(),
+      supplierPdfFolderPath: settingsForm.supplierPdfFolderPath.trim() || DEFAULT_SUPPLIER_PDF_FOLDER,
+      factoryRenameExcelPath: settingsForm.factoryRenameExcelPath.trim() || DEFAULT_FACTORY_RENAME_EXCEL,
+      csvPath: settingsForm.csvPath.trim(),
+      zipPath: settingsForm.zipPath.trim(),
+      pricePath: settingsForm.pricePath.trim() || DEFAULT_PRICE_PATH,
+    };
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings));
+    setFolderPath(nextSettings.folderPath);
+    setSupplierPdfFolderPath(nextSettings.supplierPdfFolderPath);
+    setFactoryRenameExcelPath(nextSettings.factoryRenameExcelPath);
+    setActiveSettings(nextSettings);
+    setSettingsForm(nextSettings);
+    setSettingsStatus([]);
+    setError("");
+  }
+
+  function restoreDefaultSettings() {
+    const nextSettings = {
+      folderPath: DEFAULT_PHOTOS_FOLDER,
+      supplierPdfFolderPath: DEFAULT_SUPPLIER_PDF_FOLDER,
+      factoryRenameExcelPath: DEFAULT_FACTORY_RENAME_EXCEL,
+      csvPath: DEFAULT_CSV_PATH,
+      zipPath: "",
+      pricePath: DEFAULT_PRICE_PATH,
+    };
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings));
+    setFolderPath(nextSettings.folderPath);
+    setSupplierPdfFolderPath(nextSettings.supplierPdfFolderPath);
+    setFactoryRenameExcelPath(nextSettings.factoryRenameExcelPath);
+    setActiveSettings(nextSettings);
+    setSettingsForm(nextSettings);
+    setSettingsStatus([]);
+  }
+
+  async function testSettingsPaths() {
+    setSettingsTesting(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/api/admin/settings/test`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify(settingsForm),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(apiErrorMessage(data, "Falha ao testar configuracoes."));
+      setSettingsStatus(data.items || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSettingsTesting(false);
+    }
+  }
+
   async function loadUsers(token) {
     setUsersLoading(true);
     setError("");
@@ -437,6 +593,70 @@ function App() {
       setError(err.message);
     } finally {
       setUsersLoading(false);
+    }
+  }
+
+  async function loadAuditEvents(token) {
+    setAuditLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/api/admin/audit-log?limit=200`, {
+        headers: authHeaders(token),
+      });
+      const data = await response.json();
+      if (response.status === 401) logout();
+      if (!response.ok) throw new Error(apiErrorMessage(data, "Falha ao carregar historico."));
+      setAuditEvents(data.events || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAuditLoading(false);
+    }
+  }
+
+  async function exportAuditEvents() {
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/api/admin/audit-log/export?limit=5000`, {
+        headers: authHeaders(),
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(apiErrorMessage(data, "Falha ao exportar historico."));
+      }
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "historico_operacoes.csv";
+      link.click();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function undoRenameEvent(event) {
+    if (!canUndoAuditEvent(event)) return;
+    const count = event.details?.renamedCount || event.details?.items?.length || 0;
+    if (!window.confirm(`Desfazer esta renomeacao de ${count} ficha(s)?`)) return;
+
+    setAuditLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${API_URL}/api/admin/audit-log/${event.id}/undo-rename`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(apiErrorMessage(data, "Falha ao desfazer renomeacao."));
+      await loadAuditEvents();
+      setFactoryRename(null);
+      setPdfAudit(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAuditLoading(false);
     }
   }
 
@@ -926,6 +1146,7 @@ function App() {
     try {
       const response = await fetch(`${API_URL}/api/excel-pdf-order/preview`, {
         method: "POST",
+        headers: authHeaders(),
         body: buildOrderedPdfForm(),
       });
       const data = await response.json();
@@ -949,6 +1170,7 @@ function App() {
     try {
       const response = await fetch(`${API_URL}/api/excel-pdf-order/suggest-folder`, {
         method: "POST",
+        headers: authHeaders(),
         body: buildOrderedPdfFolderForm(),
       });
       const data = await response.json();
@@ -986,6 +1208,7 @@ function App() {
 
       const response = await fetch(`${API_URL}/api/supplier-pdf/extract`, {
         method: "POST",
+        headers: authHeaders(),
         body: form,
       });
       const data = await response.json();
@@ -1037,6 +1260,7 @@ function App() {
       const isFolderPreview = orderedPreview?.source === "folder";
       const response = await fetch(`${API_URL}/api/excel-pdf-order/${isFolderPreview ? "fill-folder" : "fill"}`, {
         method: "POST",
+        headers: authHeaders(),
         body: isFolderPreview
           ? buildOrderedPdfFolderForm({
               selected_pdf_files: JSON.stringify(
@@ -1195,7 +1419,11 @@ function App() {
           ? "Auditoria de fichas PDF"
           : activeSection === "factoryRename"
             ? "Renomear fichas por codigo"
-            : "Gerenciamento de usuarios";
+            : activeSection === "auditLog"
+              ? "Historico de operacoes"
+              : activeSection === "settings"
+                ? "Configuracoes"
+                : "Gerenciamento de usuarios";
   const activeDescription =
     activeSection === "generator"
       ? "Veja os produtos com fotos, selecione itens e gere a planilha Excel."
@@ -1205,7 +1433,11 @@ function App() {
           ? "Revise as fichas sugeridas para os produtos com foto e inclua o codigo interno nos nomes."
           : activeSection === "factoryRename"
             ? "Leia os PDFs, encontre o codigo de fabrica na planilha e renomeie com previa."
-            : "Crie contas e controle senhas, status e niveis de permissao.";
+            : activeSection === "auditLog"
+              ? "Acompanhe acoes administrativas, geracoes e alteracoes feitas no sistema."
+              : activeSection === "settings"
+                ? "Defina os caminhos padrao usados nas ferramentas deste navegador."
+                : "Crie contas e controle senhas, status e niveis de permissao.";
 
   if (!session) return <LoginScreen onLogin={saveSession} />;
 
@@ -1293,6 +1525,37 @@ function App() {
               </span>
             </button>
           )}
+          {session.user.role === "administrador" && (
+            <button
+              className={activeSection === "auditLog" ? "active" : ""}
+              onClick={() => {
+                setActiveSection("auditLog");
+                setError("");
+                loadAuditEvents();
+              }}
+            >
+              <History size={19} />
+              <span>
+                <strong>Historico</strong>
+                <small>Operacoes e alteracoes</small>
+              </span>
+            </button>
+          )}
+          {session.user.role === "administrador" && (
+            <button
+              className={activeSection === "settings" ? "active" : ""}
+              onClick={() => {
+                setActiveSection("settings");
+                setError("");
+              }}
+            >
+              <Settings size={19} />
+              <span>
+                <strong>Configuracoes</strong>
+                <small>Caminhos padrao</small>
+              </span>
+            </button>
+          )}
         </nav>
         <div className="sidebar-session">
           <span>{session.user.username}</span>
@@ -1335,38 +1598,14 @@ function App() {
             <Printer size={18} />
             {selectedCount ? "Exportar selecionados" : "Exportar PDF"}
           </button>
+          <button className="secondary" onClick={() => loadProducts({ page: 1 })} disabled={loading}>
+            {loading ? <Loader2 className="spin" size={18} /> : <RefreshCcw size={18} />}
+            Carregar
+          </button>
         </div>}
       </header>
 
       {activeSection === "generator" && <>
-      <section className="control-band">
-        <label className="file-control">
-          <Upload size={17} />
-          <span>{csvFile ? csvFile.name : "CSV de produtos"}</span>
-          <input type="file" accept=".csv" onChange={(event) => setCsvFile(event.target.files?.[0] || null)} />
-        </label>
-
-        <label className="file-control">
-          <Image size={17} />
-          <span>{zipFile ? zipFile.name : "ZIP das fotos"}</span>
-          <input type="file" accept=".zip" onChange={(event) => setZipFile(event.target.files?.[0] || null)} />
-        </label>
-
-        <label className="folder-input">
-          <FolderOpen size={17} />
-          <input
-            value={folderPath}
-            onChange={(event) => setFolderPath(event.target.value)}
-            placeholder="Caminho da pasta de fotos"
-          />
-        </label>
-
-        <button className="secondary" onClick={() => loadProducts({ page: 1 })} disabled={loading}>
-          {loading ? <Loader2 className="spin" size={17} /> : <RefreshCcw size={17} />}
-          Carregar
-        </button>
-      </section>
-
       <section className="filter-band">
         <label className="search-input">
           <Search size={17} />
@@ -2061,6 +2300,9 @@ function App() {
               <div className="pdf-audit-summary">
                 <span>Produtos na planilha: {factoryRename.productCount}</span>
                 <span>PDFs encontrados: {factoryRename.pdfCount}</span>
+                {factoryRename.duplicateFileNameCount > 0 && (
+                  <span className="warn">Duplicados: {factoryRename.duplicateFileNameCount}</span>
+                )}
                 <span className="ok">Para renomear: {factoryRename.items.filter((item) => item.selected).length}</span>
                 <span className="warn">Ignorados: {factoryRename.items.filter((item) => !item.selected).length}</span>
                 <button
@@ -2079,6 +2321,12 @@ function App() {
                   />
                 </label>
               </div>
+
+              {factoryRename.duplicateFileNameCount > 0 && (
+                <div className="pdf-audit-warning">
+                  Existem PDFs com nomes repetidos em subpastas diferentes. Revise antes de renomear: {(factoryRename.duplicateFileNames || []).slice(0, 6).join(", ")}
+                </div>
+              )}
 
               <div className="factory-rename-list">
                 <div className="factory-rename-row factory-rename-header">
@@ -2233,6 +2481,163 @@ function App() {
               </table>
             </div>
           </div>
+        </section>
+      )}
+
+      {activeSection === "auditLog" && session.user.role === "administrador" && (
+        <section className="audit-log-tool">
+          <div className="audit-log-header">
+            <div className="pdf-audit-summary">
+              <span>Total: {auditSummary.total}</span>
+              <span className="ok">Sucesso: {auditSummary.success}</span>
+              <span className="warn">Erros: {auditSummary.error}</span>
+            </div>
+            <div className="audit-log-actions">
+              <button className="ghost" onClick={exportAuditEvents} disabled={auditLoading || !auditEvents.length}>
+                <Download size={17} />
+                Exportar CSV
+              </button>
+              <button className="ghost" onClick={() => loadAuditEvents()} disabled={auditLoading}>
+                <RefreshCcw className={auditLoading ? "spin" : ""} size={17} />
+                Atualizar
+              </button>
+            </div>
+          </div>
+
+          <div className="table-wrap">
+            <table className="audit-log-table">
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Usuario</th>
+                  <th>Acao</th>
+                  <th>Status</th>
+                  <th>Detalhes</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditEvents.map((event) => (
+                  <tr key={event.id}>
+                    <td>{formatAuditDate(event.createdAt)}</td>
+                    <td className="code-cell">{event.username || "-"}</td>
+                    <td>{auditActionLabel(event.action)}</td>
+                    <td>
+                      <span className={event.status === "success" ? "user-status active" : "user-status inactive"}>
+                        {event.status === "success" ? "SUCESSO" : "ERRO"}
+                      </span>
+                    </td>
+                    <td className="audit-details" title={auditDetailsText(event.details)}>
+                      {auditDetailsText(event.details)}
+                    </td>
+                    <td className="user-actions">
+                      {canUndoAuditEvent(event) && (
+                        <button className="ghost danger" onClick={() => undoRenameEvent(event)} disabled={auditLoading}>
+                          <RefreshCcw size={16} />
+                          Desfazer
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {!auditLoading && auditEvents.length === 0 && (
+                  <tr><td colSpan="6" className="empty-row">Nenhuma operacao registrada.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {activeSection === "settings" && session.user.role === "administrador" && (
+        <section className="settings-tool">
+          <form className="settings-form" onSubmit={saveSettings}>
+            <div className="settings-file-row">
+              <label className="file-control">
+                <Upload size={17} />
+                <span>{csvFile ? csvFile.name : "CSV de produtos"}</span>
+                <input type="file" accept=".csv" onChange={(event) => setCsvFile(event.target.files?.[0] || null)} />
+              </label>
+              <label className="file-control">
+                <Image size={17} />
+                <span>{zipFile ? zipFile.name : "ZIP das fotos"}</span>
+                <input type="file" accept=".zip" onChange={(event) => setZipFile(event.target.files?.[0] || null)} />
+              </label>
+            </div>
+            <label>
+              Caminho padrao do CSV ou planilha de produtos
+              <input
+                value={settingsForm.csvPath}
+                onChange={(event) => setSettingsForm((current) => ({ ...current, csvPath: event.target.value }))}
+                placeholder={DEFAULT_CSV_PATH}
+              />
+            </label>
+            <label>
+              Caminho padrao do ZIP das fotos
+              <input
+                value={settingsForm.zipPath}
+                onChange={(event) => setSettingsForm((current) => ({ ...current, zipPath: event.target.value }))}
+                placeholder="Ex.: data\\Fotos Cod.zip"
+              />
+            </label>
+            <label>
+              Pasta padrao das fotos
+              <input
+                value={settingsForm.folderPath}
+                onChange={(event) => setSettingsForm((current) => ({ ...current, folderPath: event.target.value }))}
+                placeholder="Ex.: Fotos Cod"
+              />
+            </label>
+            <label>
+              Pasta padrao das fichas PDF
+              <input
+                value={settingsForm.supplierPdfFolderPath}
+                onChange={(event) => setSettingsForm((current) => ({ ...current, supplierPdfFolderPath: event.target.value }))}
+                placeholder={DEFAULT_SUPPLIER_PDF_FOLDER}
+              />
+            </label>
+            <label>
+              Planilha de codigo de fabrica
+              <input
+                value={settingsForm.factoryRenameExcelPath}
+                onChange={(event) => setSettingsForm((current) => ({ ...current, factoryRenameExcelPath: event.target.value }))}
+                placeholder={DEFAULT_FACTORY_RENAME_EXCEL}
+              />
+            </label>
+            <label>
+              Planilha de precos
+              <input
+                value={settingsForm.pricePath}
+                onChange={(event) => setSettingsForm((current) => ({ ...current, pricePath: event.target.value }))}
+                placeholder={DEFAULT_PRICE_PATH}
+              />
+            </label>
+            <div className="settings-actions">
+              <button className="primary" type="submit">
+                <Check size={17} />
+                Salvar configuracoes
+              </button>
+              <button className="secondary" type="button" onClick={testSettingsPaths} disabled={settingsTesting}>
+                {settingsTesting ? <Loader2 className="spin" size={17} /> : <Search size={17} />}
+                Testar caminhos
+              </button>
+              <button className="ghost" type="button" onClick={restoreDefaultSettings}>
+                <RefreshCcw size={17} />
+                Restaurar padroes
+              </button>
+            </div>
+            {settingsStatus.length > 0 && (
+              <div className="settings-status-list">
+                {settingsStatus.map((item) => (
+                  <div className={`settings-status-item ${item.ok ? "ok" : "warn"}`} key={item.label}>
+                    <span>{item.ok ? <Check size={16} /> : <X size={16} />}</span>
+                    <strong>{item.label}</strong>
+                    <small>{item.path || item.message}</small>
+                  </div>
+                ))}
+              </div>
+            )}
+          </form>
         </section>
       )}
 

@@ -13,7 +13,11 @@ venv/
 users.db
 users.db-shm
 users.db-wal
+audit_log.db
+audit_log.db-shm
+audit_log.db-wal
 admin.local.json
+settings.local.json
 .session_secret
 start-backend.cmd
 start-frontend.cmd

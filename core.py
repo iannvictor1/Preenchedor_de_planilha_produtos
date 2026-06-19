@@ -1,4 +1,5 @@
 import base64
+from collections import Counter
 import csv
 import difflib
 import io
@@ -24,9 +25,11 @@ from PIL import Image as PILImage
 from PIL import ImageOps, UnidentifiedImageError
 from pypdf import PdfReader
 
+from file_ops import undo_pdf_renames, verified_rename_pdf
+
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_CSV = BASE_DIR / "data/Listagem dos produtos.xlsx.csv"
+DEFAULT_CSV = BASE_DIR / "Listagem dos produtos.xlsx.csv"
 DEFAULT_ZIP = BASE_DIR / "data/Fotos Cod-20260430T175121Z-3-001.zip"
 DEFAULT_PHOTOS = BASE_DIR / "Fotos Cod"
 DEFAULT_FACTORY_CODES = BASE_DIR / "produtos codigo fabrica.xlsx"
@@ -1154,8 +1157,7 @@ def rename_audited_product_pdfs(pdf_folder_path, renames):
 
     renamed = []
     for source, target, source_name in prepared:
-        if source != target:
-            source.rename(target)
+        verified_rename_pdf(source, target, source_name)
         renamed.append({
             "sourceFile": source_name,
             "targetFile": str(target.relative_to(folder)),
@@ -1361,6 +1363,29 @@ def find_factory_rename_product(factory_code, exact, no_zeroes, pdf_path, pdf_te
     return None, "nao encontrado"
 
 
+def find_factory_rename_product_code_in_text(exact, pdf_path, pdf_text):
+    """Find spreadsheet factory codes embedded anywhere in supplier PDF text."""
+    matched_products = {}
+    matched_codes = {}
+    for raw_code in re.findall(r"(?<![A-Z0-9])[A-Z0-9][A-Z0-9.\-/]{2,}(?![A-Z0-9])", pdf_text.upper()):
+        code = factory_rename_normalize_code(raw_code.rstrip(".-"))
+        if len(code) < 6:
+            continue
+        for product in exact.get(code, []):
+            matched_products[product.internal_code] = product
+            matched_codes.setdefault(product.internal_code, code)
+
+    products = list(matched_products.values())
+    if len(products) == 1:
+        product = products[0]
+        return product, matched_codes[product.internal_code], "codigo da planilha no PDF"
+    if len(products) > 1:
+        product = choose_factory_rename_description_match(products, pdf_path, pdf_text)
+        if product:
+            return product, matched_codes[product.internal_code], "codigo da planilha no PDF + descricao"
+    return None, "", ""
+
+
 def factory_rename_target_path(pdf_path, product):
     name = clean_filename_part(f"{product.internal_code} - {product.description}") + ".pdf"
     return pdf_path.with_name(name)
@@ -1392,6 +1417,9 @@ def preview_factory_code_pdf_renames(excel_path, pdf_folder_path):
     pdfs = sorted(folder.rglob("*.pdf"))
     if not pdfs:
         raise ValueError(f"Nenhum PDF encontrado em: {folder}")
+    duplicate_names = sorted(
+        name for name, count in Counter(pdf.name.lower() for pdf in pdfs).items() if count > 1
+    )
 
     items = []
     planned_targets = set()
@@ -1412,20 +1440,29 @@ def preview_factory_code_pdf_renames(excel_path, pdf_folder_path):
             })
             continue
 
-        if not factory_code:
-            items.append({
-                "sourceFile": rel_name,
-                "factoryCode": "",
-                "targetFile": "",
-                "productCode": "",
-                "productDescription": "",
-                "status": "sem_codigo",
-                "message": "Nao encontrei codigo na ficha",
-                "selected": False,
-            })
-            continue
+        product = None
+        status = ""
+        if factory_code:
+            product, status = find_factory_rename_product(
+                factory_code, exact, no_zeroes, pdf_path, pdf_text
+            )
+        else:
+            product, factory_code, status = find_factory_rename_product_code_in_text(
+                exact, pdf_path, pdf_text
+            )
+            if product is None:
+                items.append({
+                    "sourceFile": rel_name,
+                    "factoryCode": "",
+                    "targetFile": "",
+                    "productCode": "",
+                    "productDescription": "",
+                    "status": "sem_codigo",
+                    "message": "Nao encontrei codigo na ficha",
+                    "selected": False,
+                })
+                continue
 
-        product, status = find_factory_rename_product(factory_code, exact, no_zeroes, pdf_path, pdf_text)
         filename_code = extract_factory_rename_filename_code(pdf_path)
         filename_internal_product = internal.get(factory_rename_normalize_code(filename_code)) if filename_code else None
         if filename_internal_product is not None and (
@@ -1444,6 +1481,15 @@ def preview_factory_code_pdf_renames(excel_path, pdf_folder_path):
                 factory_code = filename_code
                 product = filename_product
                 status = f"{filename_status} pelo nome do arquivo"
+
+        if product is None or factory_rename_description_score(product, pdf_path, pdf_text) <= 0:
+            text_product, text_code, text_status = find_factory_rename_product_code_in_text(
+                exact, pdf_path, pdf_text
+            )
+            if text_product is not None:
+                product = text_product
+                factory_code = text_code
+                status = text_status
 
         if product is None:
             items.append({
@@ -1493,6 +1539,8 @@ def preview_factory_code_pdf_renames(excel_path, pdf_folder_path):
         "excelPath": str(Path(excel_path).expanduser().resolve()),
         "productCount": product_count,
         "pdfCount": len(pdfs),
+        "duplicateFileNameCount": len(duplicate_names),
+        "duplicateFileNames": duplicate_names[:30],
         "renameCount": sum(1 for item in items if item["selected"] and item["targetFile"]),
         "skippedCount": sum(1 for item in items if not item["selected"]),
         "items": items,
@@ -1531,8 +1579,7 @@ def apply_factory_code_pdf_renames(pdf_folder_path, renames):
 
     renamed = []
     for source, target, source_name in prepared:
-        if source != target:
-            source.rename(target)
+        verified_rename_pdf(source, target, source_name)
         renamed.append({
             "sourceFile": source_name,
             "targetFile": str(target.relative_to(folder)),
@@ -2414,11 +2461,12 @@ def build_search_text(row):
         summary["brand"],
     ]).lower()
 
-def read_product_prices(region=DEFAULT_PRICE_REGION):
-    if not PRICE_FILE.exists():
-        raise ValueError(f"Planilha de preços não encontrada: {PRICE_FILE.name}")
+def read_product_prices(region=DEFAULT_PRICE_REGION, price_path=None):
+    path = Path(price_path).expanduser() if str(price_path or "").strip() else PRICE_FILE
+    if not path.exists():
+        raise ValueError(f"Planilha de preços não encontrada: {path.name}")
 
-    wb = load_workbook(PRICE_FILE, read_only=True, data_only=True)
+    wb = load_workbook(path, read_only=True, data_only=True)
     ws = wb["preço"] if "preço" in wb.sheetnames else wb.active
 
     headers = {
@@ -2498,9 +2546,17 @@ def preencher_ficha_template(ficha, row, code, sheet_image, price=None):
             pass
 
 
-def load_inputs(csv_bytes=None, zip_bytes=None, folder_path=""):
+def load_inputs(csv_bytes=None, zip_bytes=None, folder_path="", csv_path="", zip_path=""):
     if csv_bytes:
         _, rows = read_csv_bytes(csv_bytes)
+    elif str(csv_path or "").strip():
+        path = Path(csv_path).expanduser()
+        if not path.exists() or not path.is_file():
+            raise ValueError(f"Arquivo de produtos não encontrado: {path}")
+        if path.suffix.lower() in {".xlsx", ".xlsm"}:
+            _, rows = read_xlsx_products(path)
+        else:
+            _, rows = read_csv_bytes(path.read_bytes())
     elif DEFAULT_CSV.exists():
         _, rows = read_csv_bytes(DEFAULT_CSV.read_bytes())
     elif find_template_file().exists():
@@ -2511,8 +2567,14 @@ def load_inputs(csv_bytes=None, zip_bytes=None, folder_path=""):
     rows = apply_factory_codes(rows)
 
     zip_file, zip_mapping = index_zip_images(zip_bytes)
-    if not zip_bytes and DEFAULT_ZIP.exists():
-        zip_file, zip_mapping = index_zip_images(DEFAULT_ZIP.read_bytes())
+    if not zip_bytes:
+        if str(zip_path or "").strip():
+            path = Path(zip_path).expanduser()
+            if not path.exists() or not path.is_file():
+                raise ValueError(f"ZIP de fotos não encontrado: {path}")
+            zip_file, zip_mapping = index_zip_images(path.read_bytes())
+        elif DEFAULT_ZIP.exists():
+            zip_file, zip_mapping = index_zip_images(DEFAULT_ZIP.read_bytes())
 
     folder_mapping = {}
     resolved_folder = default_folder_path(folder_path)
@@ -2582,6 +2644,8 @@ def list_products(
     csv_bytes=None,
     zip_bytes=None,
     folder_path="",
+    csv_path="",
+    zip_path="",
     supplier_pdf_folder_path="",
     search="",
     only_with_photo=False,
@@ -2589,7 +2653,7 @@ def list_products(
     page=1,
     page_size=120,
 ):
-    rows, zip_file, zip_mapping, folder_mapping = load_inputs(csv_bytes, zip_bytes, folder_path)
+    rows, zip_file, zip_mapping, folder_mapping = load_inputs(csv_bytes, zip_bytes, folder_path, csv_path, zip_path)
     image_codes = set(zip_mapping) | set(folder_mapping)
     supplier_pdf_codes = (
         supplier_pdf_exact_match_codes(supplier_pdf_folder_path, rows)
@@ -2790,13 +2854,16 @@ def generate_workbook_for_codes(
     csv_bytes=None,
     zip_bytes=None,
     folder_path="",
+    csv_path="",
+    zip_path="",
     include_product_sheets=True,
     supplier_pdf_bytes=None,
     supplier_pdf_folder_path="",
     include_prices=False,
     price_overrides=None,
+    price_path=None,
 ):
-    rows, zip_file, zip_mapping, folder_mapping = load_inputs(csv_bytes, zip_bytes, folder_path)
+    rows, zip_file, zip_mapping, folder_mapping = load_inputs(csv_bytes, zip_bytes, folder_path, csv_path, zip_path)
     selected = set(normalize_code(code) for code in selected_codes)
     selected_rows = [row for row in rows if row_code(row) in selected]
     if not selected_rows:
@@ -2813,7 +2880,7 @@ def generate_workbook_for_codes(
             else row
             for row in selected_rows
         ]
-    price_by_code = read_product_prices() if include_prices else {}
+    price_by_code = read_product_prices(price_path=price_path) if include_prices else {}
     price_by_code.update(price_overrides or {})
 
     return create_workbook_bytes(

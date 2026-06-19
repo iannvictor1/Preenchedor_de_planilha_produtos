@@ -1,5 +1,8 @@
 import json
+import csv
+import io
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
@@ -7,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
+from audit import get_audit_event, list_audit_events, log_audit_event
 from auth import (
     authenticate,
     create_token,
@@ -37,6 +41,7 @@ from core import (
     read_product_prices,
     read_pdf_files_from_folder_selection,
     rename_audited_product_pdfs,
+    undo_pdf_renames,
 )
 
 
@@ -75,6 +80,24 @@ class FactoryCodeRenameRequest(BaseModel):
     folderPath: str
     items: list[FactoryCodeRenameItem]
 
+
+class SettingsTestRequest(BaseModel):
+    folderPath: str = ""
+    supplierPdfFolderPath: str = ""
+    factoryRenameExcelPath: str = ""
+    csvPath: str = ""
+    zipPath: str = ""
+    pricePath: str = ""
+
+
+def audit_failure(user, action, exc, **details):
+    log_audit_event(
+        user,
+        action,
+        "error",
+        {**details, "error": str(exc)},
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -107,6 +130,23 @@ async def read_uploaded_files(files: list[UploadFile] | None, default_name: str)
         if data:
             out.append({"name": file.filename or default_name, "data": data})
     return out
+
+
+def path_status(value, expected, label, optional=False):
+    raw = str(value or "").strip()
+    if not raw:
+        if optional:
+            return {"label": label, "path": "", "ok": True, "message": "Opcional não informado."}
+        return {"label": label, "path": "", "ok": False, "message": "Não informado."}
+    path = Path(raw).expanduser()
+    exists = path.exists()
+    if expected == "dir":
+        ok = exists and path.is_dir()
+        expected_message = "Pasta encontrada." if ok else "Pasta não encontrada."
+    else:
+        ok = exists and path.is_file()
+        expected_message = "Arquivo encontrado." if ok else "Arquivo não encontrado."
+    return {"label": label, "path": str(path), "ok": ok, "message": expected_message}
 
 
 @app.get("/api/health")
@@ -142,14 +182,109 @@ def users_list(current_user: dict = Depends(require_admin)):
     return {"users": list_users()}
 
 
+@app.get("/api/admin/audit-log")
+def admin_audit_log(
+    limit: int = Query(default=200, ge=1, le=1000),
+    current_user: dict = Depends(require_admin),
+):
+    return {"events": list_audit_events(limit)}
+
+
+@app.post("/api/admin/settings/test")
+def admin_settings_test(
+    request: SettingsTestRequest,
+    current_user: dict = Depends(require_admin),
+):
+    return {
+        "items": [
+            path_status(request.folderPath, "dir", "Pasta de fotos"),
+            path_status(request.supplierPdfFolderPath, "dir", "Pasta de fichas PDF"),
+            path_status(request.factoryRenameExcelPath, "file", "Planilha de código de fábrica"),
+            path_status(request.csvPath, "file", "CSV/planilha de produtos"),
+            path_status(request.zipPath, "file", "ZIP das fotos", optional=True),
+            path_status(request.pricePath, "file", "Planilha de preços"),
+        ]
+    }
+
+
+@app.get("/api/admin/audit-log/export")
+def admin_audit_log_export(
+    limit: int = Query(default=1000, ge=1, le=5000),
+    current_user: dict = Depends(require_admin),
+):
+    events = list_audit_events(limit)
+    out = io.StringIO()
+    writer = csv.writer(out, delimiter=";")
+    writer.writerow(["id", "data", "usuario", "perfil", "acao", "status", "detalhes"])
+    for event in events:
+        writer.writerow([
+            event["id"],
+            event["createdAt"],
+            event["username"] or "",
+            event["role"] or "",
+            event["action"],
+            event["status"],
+            json.dumps(event["details"], ensure_ascii=False),
+        ])
+    return Response(
+        content="\ufeff" + out.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="historico_operacoes.csv"'},
+    )
+
+
+@app.post("/api/admin/audit-log/{event_id}/undo-rename")
+def admin_audit_log_undo_rename(
+    event_id: int,
+    current_user: dict = Depends(require_admin),
+):
+    event = get_audit_event(event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Evento nao encontrado.")
+    if event["status"] != "success" or event["action"] not in {"pdf_audit.rename", "factory_code_rename.apply"}:
+        raise HTTPException(status_code=400, detail="Este evento nao pode ser desfeito.")
+    details = event.get("details") or {}
+    try:
+        result = undo_pdf_renames(details.get("folderPath", ""), details.get("items", []))
+        log_audit_event(
+            current_user,
+            "rename.undo",
+            details={
+                "eventId": event_id,
+                "originalAction": event["action"],
+                "folderPath": details.get("folderPath", ""),
+                "undoneCount": result["undoneCount"],
+                "items": result["items"],
+            },
+        )
+        return result
+    except ValueError as exc:
+        audit_failure(
+            current_user,
+            "rename.undo",
+            exc,
+            eventId=event_id,
+            originalAction=event["action"],
+            folderPath=details.get("folderPath", ""),
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/users", status_code=201)
 def users_create(
     request: UserCreateRequest,
     current_user: dict = Depends(require_admin),
 ):
     try:
-        return create_user(request.username, request.password, request.role)
+        created = create_user(request.username, request.password, request.role)
+        log_audit_event(
+            current_user,
+            "user.create",
+            details={"createdUserId": created["id"], "username": created["username"], "role": created["role"]},
+        )
+        return created
     except ValueError as exc:
+        audit_failure(current_user, "user.create", exc, username=request.username, role=request.role)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -177,8 +312,20 @@ def users_update(
         )
         if user_id == current_user["id"]:
             updated["token"] = create_token(token_user(user_id))
+        log_audit_event(
+            current_user,
+            "user.update",
+            details={
+                "updatedUserId": user_id,
+                "username": updated["username"],
+                "role": updated["role"],
+                "active": updated["active"],
+                "passwordChanged": bool(request.password),
+            },
+        )
         return updated
     except ValueError as exc:
+        audit_failure(current_user, "user.update", exc, updatedUserId=user_id)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -186,7 +333,9 @@ def users_update(
 def users_delete(user_id: int, current_user: dict = Depends(require_admin)):
     try:
         delete_user(user_id, current_user["id"])
+        log_audit_event(current_user, "user.delete", details={"deletedUserId": user_id})
     except ValueError as exc:
+        audit_failure(current_user, "user.delete", exc, deletedUserId=user_id)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return Response(status_code=204)
 
@@ -212,6 +361,7 @@ def photo(code: str, folder_path: str = Query(default="")):
 @app.post("/api/supplier-pdf/extract")
 async def supplier_pdf_extract(
     supplier_pdf_file: Annotated[UploadFile | None, File()] = None,
+    current_user: dict = Depends(require_user),
 ):
     try:
         return extract_supplier_pdf_data(await read_optional_file(supplier_pdf_file))
@@ -225,12 +375,17 @@ async def supplier_pdfs_analyze_folder(
     csv_file: Annotated[UploadFile | None, File()] = None,
     zip_file: Annotated[UploadFile | None, File()] = None,
     folder_path: Annotated[str, Form()] = "",
+    csv_path: Annotated[str, Form()] = "",
+    zip_path: Annotated[str, Form()] = "",
+    current_user: dict = Depends(require_user),
 ):
     try:
         rows, _, _, _ = load_inputs(
             csv_bytes=await read_optional_file(csv_file),
             zip_bytes=await read_optional_file(zip_file),
             folder_path=folder_path,
+            csv_path=csv_path,
+            zip_path=zip_path,
         )
         return analyze_supplier_pdf_folder(supplier_pdf_folder_path, rows)
     except ValueError as exc:
@@ -255,11 +410,29 @@ def admin_pdf_audit_rename(
     current_user: dict = Depends(require_admin),
 ):
     try:
-        return rename_audited_product_pdfs(
+        result = rename_audited_product_pdfs(
             request.folderPath,
             [item.dict() for item in request.items],
         )
+        log_audit_event(
+            current_user,
+            "pdf_audit.rename",
+            details={
+                "folderPath": request.folderPath,
+                "requestedCount": len(request.items),
+                "renamedCount": result["renamedCount"],
+                "items": result["items"],
+            },
+        )
+        return result
     except ValueError as exc:
+        audit_failure(
+            current_user,
+            "pdf_audit.rename",
+            exc,
+            folderPath=request.folderPath,
+            requestedCount=len(request.items),
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -281,11 +454,29 @@ def admin_factory_code_rename_apply(
     current_user: dict = Depends(require_admin),
 ):
     try:
-        return apply_factory_code_pdf_renames(
+        result = apply_factory_code_pdf_renames(
             request.folderPath,
             [item.dict() for item in request.items],
         )
+        log_audit_event(
+            current_user,
+            "factory_code_rename.apply",
+            details={
+                "folderPath": request.folderPath,
+                "requestedCount": len(request.items),
+                "renamedCount": result["renamedCount"],
+                "items": result["items"],
+            },
+        )
+        return result
     except ValueError as exc:
+        audit_failure(
+            current_user,
+            "factory_code_rename.apply",
+            exc,
+            folderPath=request.folderPath,
+            requestedCount=len(request.items),
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -293,6 +484,7 @@ def admin_factory_code_rename_apply(
 async def excel_pdf_order_preview(
     workbook_file: Annotated[UploadFile | None, File()] = None,
     pdf_files: Annotated[list[UploadFile], File()] = [],
+    current_user: dict = Depends(require_user),
 ):
     try:
         return ordered_pdf_preview(
@@ -307,6 +499,7 @@ async def excel_pdf_order_preview(
 async def excel_xml_cest_preview(
     workbook_file: Annotated[UploadFile | None, File()] = None,
     xml_files: Annotated[list[UploadFile], File()] = [],
+    current_user: dict = Depends(require_user),
 ):
     try:
         return nfe_xml_cest_preview(
@@ -322,6 +515,7 @@ async def excel_xml_cest_fill(
     selected_indexes: Annotated[str, Form()] = "[]",
     workbook_file: Annotated[UploadFile | None, File()] = None,
     xml_files: Annotated[list[UploadFile], File()] = [],
+    current_user: dict = Depends(require_user),
 ):
     try:
         indexes = json.loads(selected_indexes)
@@ -331,6 +525,11 @@ async def excel_xml_cest_fill(
             await read_optional_file(workbook_file),
             await read_uploaded_files(xml_files, "nota.xml"),
             indexes,
+        )
+        log_audit_event(
+            current_user,
+            "excel_xml_cest.fill",
+            details={"selectedCount": len(indexes), "xmlCount": len(xml_files or [])},
         )
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="Seleção de CEST inválida.") from exc
@@ -348,6 +547,7 @@ async def excel_xml_cest_fill(
 async def excel_pdf_order_suggest_folder(
     workbook_file: Annotated[UploadFile | None, File()] = None,
     supplier_pdf_folder_path: Annotated[str, Form()] = "",
+    current_user: dict = Depends(require_user),
 ):
     try:
         return ordered_pdf_folder_suggestions(
@@ -362,6 +562,7 @@ async def excel_pdf_order_suggest_folder(
 async def excel_pdf_order_inspect_folder_file(
     supplier_pdf_folder_path: Annotated[str, Form()] = "",
     selected_pdf_file: Annotated[str, Form()] = "",
+    current_user: dict = Depends(require_user),
 ):
     try:
         return inspect_pdf_from_folder(supplier_pdf_folder_path, selected_pdf_file)
@@ -373,11 +574,17 @@ async def excel_pdf_order_inspect_folder_file(
 async def excel_pdf_order_fill(
     workbook_file: Annotated[UploadFile | None, File()] = None,
     pdf_files: Annotated[list[UploadFile], File()] = [],
+    current_user: dict = Depends(require_user),
 ):
     try:
         data = fill_workbook_with_ordered_pdfs(
             await read_optional_file(workbook_file),
             await read_pdf_files(pdf_files),
+        )
+        log_audit_event(
+            current_user,
+            "excel_pdf_order.fill_upload",
+            details={"pdfCount": len(pdf_files or [])},
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -398,6 +605,7 @@ async def excel_pdf_order_fill_folder(
     selected_pdf_files: Annotated[str, Form()] = "[]",
     replacement_pdf_files: Annotated[list[UploadFile], File()] = [],
     replacement_pdf_indexes: Annotated[list[int], Form()] = [],
+    current_user: dict = Depends(require_user),
 ):
     try:
         selected_files = json.loads(selected_pdf_files)
@@ -414,6 +622,15 @@ async def excel_pdf_order_fill_folder(
         data = fill_workbook_with_ordered_pdfs(
             await read_optional_file(workbook_file),
             pdf_files,
+        )
+        log_audit_event(
+            current_user,
+            "excel_pdf_order.fill_folder",
+            details={
+                "folderPath": supplier_pdf_folder_path,
+                "selectedCount": sum(1 for item in selected_files if str(item or "").strip()),
+                "replacementCount": len(replacement_pdf_files or []),
+            },
         )
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="Selecao de fichas invalida.") from exc
@@ -434,6 +651,8 @@ async def products(
     csv_file: Annotated[UploadFile | None, File()] = None,
     zip_file: Annotated[UploadFile | None, File()] = None,
     folder_path: Annotated[str, Form()] = "",
+    csv_path: Annotated[str, Form()] = "",
+    zip_path: Annotated[str, Form()] = "",
     supplier_pdf_folder_path: Annotated[str, Form()] = "",
     search: Annotated[str, Form()] = "",
     only_with_photo: Annotated[bool, Form()] = False,
@@ -447,6 +666,8 @@ async def products(
             csv_bytes=await read_optional_file(csv_file),
             zip_bytes=await read_optional_file(zip_file),
             folder_path=folder_path,
+            csv_path=csv_path,
+            zip_path=zip_path,
             supplier_pdf_folder_path=supplier_pdf_folder_path,
             search=search,
             only_with_photo=only_with_photo,
@@ -468,12 +689,15 @@ async def generate(
     supplier_pdf_file: Annotated[UploadFile | None, File()] = None,
     supplier_pdf_folder_path: Annotated[str, Form()] = "",
     folder_path: Annotated[str, Form()] = "",
+    csv_path: Annotated[str, Form()] = "",
+    zip_path: Annotated[str, Form()] = "",
+    price_path: Annotated[str, Form()] = "",
     custom_prices: Annotated[str, Form()] = "{}",
     current_user: dict = Depends(require_user),
 ):
     try:
         codes = json.loads(selected_codes)
-        original_prices = read_product_prices()
+        original_prices = read_product_prices(price_path=price_path) if include_prices else {}
         received_prices = json.loads(custom_prices) if include_prices else {}
         if not isinstance(received_prices, dict):
             raise ValueError("Preços personalizados inválidos.")
@@ -507,15 +731,32 @@ async def generate(
             csv_bytes=await read_optional_file(csv_file),
             zip_bytes=await read_optional_file(zip_file),
             folder_path=folder_path,
+            csv_path=csv_path,
+            zip_path=zip_path,
             include_product_sheets=include_product_sheets,
             supplier_pdf_bytes=await read_optional_file(supplier_pdf_file),
             supplier_pdf_folder_path=supplier_pdf_folder_path,
             include_prices=include_prices,
             price_overrides=validated_prices if include_prices else {},
+            price_path=price_path,
+        )
+        log_audit_event(
+            current_user,
+            "workbook.generate",
+            details={
+                "selectedCount": len(codes) if isinstance(codes, list) else 0,
+                "includeProductSheets": include_product_sheets,
+                "includePrices": include_prices,
+                "customPriceCount": len(validated_prices),
+                "folderPath": folder_path,
+                "supplierPdfFolderPath": supplier_pdf_folder_path,
+            },
         )
     except json.JSONDecodeError as exc:
+        audit_failure(current_user, "workbook.generate", exc)
         raise HTTPException(status_code=400, detail="Selecao invalida.") from exc
     except ValueError as exc:
+        audit_failure(current_user, "workbook.generate", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return Response(

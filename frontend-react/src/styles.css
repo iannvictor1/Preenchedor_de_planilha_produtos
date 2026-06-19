@@ -515,6 +515,13 @@ label.file-control {
   color: #bdf6a8;
 }
 
+.pdf-audit-warning {
+  border: 1px solid #7f6b2a;
+  padding: 11px 13px;
+  background: #2b2615;
+  color: #ffe08a;
+}
+
 .pdf-audit-empty {
   min-height: 150px;
   display: grid;
@@ -705,6 +712,131 @@ label.file-control {
   border-color: #7d4038;
   background: #2d1d1b;
   color: #ffc5bc;
+}
+
+.audit-log-tool {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--line-soft);
+  padding: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.audit-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.audit-log-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.audit-log-header .pdf-audit-summary {
+  flex: 1 1 auto;
+  border: 0;
+  padding: 0;
+}
+
+.audit-log-table {
+  min-width: 1040px;
+}
+
+.audit-log-table th,
+.audit-log-table td {
+  vertical-align: top;
+}
+
+.audit-details {
+  max-width: 520px;
+  color: #cfd9d5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-tool {
+  max-width: 780px;
+}
+
+.settings-form {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--line-soft);
+  padding: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.settings-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-form label {
+  display: grid;
+  gap: 6px;
+  color: #dce3e0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.settings-form input {
+  width: 100%;
+  height: 42px;
+  border: 1px solid var(--line);
+  padding: 0 10px;
+  background: #0f1416;
+  color: var(--text);
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-status-list {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.settings-status-item {
+  display: grid;
+  grid-template-columns: 22px 180px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  background: #111719;
+  color: #dce3e0;
+  font-size: 13px;
+}
+
+.settings-status-item.ok {
+  border-color: #3e6737;
+}
+
+.settings-status-item.warn {
+  border-color: #7d4038;
+}
+
+.settings-status-item small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
 }
 
 .pagination-band {
